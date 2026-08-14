@@ -26,6 +26,7 @@ dsh-store-server/
 ├── scripts/update.sh     # 一键更新预置流水线
 ├── scripts/deploy.sh     # compose 部署/升级（拉取失败自动回退本地构建）
 ├── scripts/deploy-docker.sh  # 纯 docker 命令部署/构建（无需 compose，自动建库/迁移/起容器）
+├── scripts/deploy-remote.sh  # 零门槛一键远程部署（curl 直接执行，免拉仓库/免登录）
 ├── docker-compose.yml    # db + migrate + api + redis
 └── .env.example
 ```
@@ -47,6 +48,24 @@ npm run dev          # 启动（无 DATABASE_URL 时用内存仓库 + 假数据�
 - 管理端：`X-Admin-Token: <管理口令>`。口令 = 配置中心「管理员」密码 → 环境变量 `ADMIN_TOKEN` 兜底；纯离线演示模式默认 `mock-admin`。**生产环境两者皆未配置时管理端整体 503，无任何硬编码后门口令**
 
 ## 部署
+
+### 🚀 零门槛一键部署（从零开始 · 免拉仓库 · 免登录）
+
+服务器上只需装好 `docker`，执行下面这一条命令（脚本直接从 GitHub 下载执行，镜像拉取 Action 构建产物；仓库公开 → 镜像公开，无需登录）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hajimilvdou/dsh-store-server/main/scripts/deploy-remote.sh | bash
+```
+
+脚本自动完成：拉镜像 → 建网络/数据卷 → 起数据库容器（首次自动生成密码写入 `.env`）→ 迁移 → 起 redis + 主程序容器 → 自检。**重复执行 = 拉新镜像升级，数据不丢。**
+
+带自定义参数运行（例如指定端口和管理口令）：
+
+```bash
+PORT=9000 ADMIN_TOKEN=你的强口令 bash <(curl -fsSL https://raw.githubusercontent.com/hajimilvdou/dsh-store-server/main/scripts/deploy-remote.sh)
+```
+
+### 其他方式（需要仓库 / 需要 compose）
 
 ```bash
 cp .env.example .env      # 按注释填写占位符：DB_PASSWORD 必填；生产环境建议同时设置 ADMIN_TOKEN
@@ -117,8 +136,9 @@ docker compose pull && docker compose up -d      # 或直接：
 ./scripts/deploy-docker.sh                       # 纯 docker 命令版（无需 compose 插件）
 ```
 
-> GHCR 镜像默认私有：服务器首次拉取前需登录一次（或到 GitHub 仓库的 Packages 设置里把镜像改为 Public）：
-> `docker login ghcr.io -u 你的GitHub用户名 -p <PAT>`（PAT 只需 `read:packages` 权限）。
+> GHCR 镜像可见性与仓库一致：**仓库公开 → 镜像公开，服务器直接 `docker pull`，无需登录**。
+> 若拉取报 `unauthorized / denied`（镜像在仓库转公开之前构建过，仍为私有）：GitHub 仓库页 → Packages → 该镜像 → Package settings → Change visibility → Public；
+> 或保持私有并在服务器登录一次：`docker login ghcr.io -u 你的GitHub用户名 -p <PAT>`（PAT 只需 `read:packages` 权限）。
 
 镜像标签：分支名 / `v*` 版本标签 / `sha` / 默认分支附加 `latest`。
 
