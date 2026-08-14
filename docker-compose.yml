@@ -1,7 +1,6 @@
-# DSH 插件商城服务端 —— 编排（db + migrate + api + redis）
-# 生产部署：GH_IMAGE=<GitHub用户名>/<仓库名> docker compose pull && docker compose up -d
-#   （拉取 GitHub Actions 构建好的镜像，无需在服务器上构建）
-# 本地开发：docker compose up -d --build（本地构建）
+﻿# DSH 鎻掍欢鍟嗗煄鏈嶅姟绔?鈥斺€?缂栨帓锛坉b + migrate + api + redis锛?# 鐢熶骇閮ㄧ讲锛欸H_IMAGE=<GitHub鐢ㄦ埛鍚?/<浠撳簱鍚? docker compose pull && docker compose up -d
+#   锛堟媺鍙?GitHub Actions 鏋勫缓濂界殑闀滃儚锛屾棤闇€鍦ㄦ湇鍔″櫒涓婃瀯寤猴級
+# 鏈湴寮€鍙戯細docker compose up -d --build锛堟湰鍦版瀯寤猴級
 services:
   db:
     image: postgres:16-alpine
@@ -9,7 +8,7 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
     environment:
       POSTGRES_USER: store
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?请在 .env 设置 DB_PASSWORD}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?璇峰湪 .env 璁剧疆 DB_PASSWORD}
       POSTGRES_DB: dshstore
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U store -d dshstore"]
@@ -17,7 +16,7 @@ services:
       retries: 12
 
   migrate:
-    image: ghcr.io/${GH_IMAGE:-yourname/dsh-store-server}:latest
+    image: ghcr.io/${GH_IMAGE:-hajimilvdou/dsh-store-server}:latest
     build: .
     command: node dist/db/migrate.js
     environment:
@@ -28,7 +27,7 @@ services:
         condition: service_healthy
 
   api:
-    image: ghcr.io/${GH_IMAGE:-yourname/dsh-store-server}:latest
+    image: ghcr.io/${GH_IMAGE:-hajimilvdou/dsh-store-server}:latest
     build: .
     restart: unless-stopped
     ports: ["8080:8080"]
@@ -36,9 +35,7 @@ services:
       DATABASE_URL: postgres://store:${DB_PASSWORD}@db:5432/dshstore
       PORT: "8080"
       HOST: "0.0.0.0"
-      # 以下密钥均为可选：留空时在管理端「配置中心」填写（保存即热更新）。
-      # 环境变量仅作首启兜底。生产环境建议至少设置 ADMIN_TOKEN 与 OAuth 三项。
-      GITHUB_TOKENS: ${GITHUB_TOKENS:-}
+      # 浠ヤ笅瀵嗛挜鍧囦负鍙€夛細鐣欑┖鏃跺湪绠＄悊绔€岄厤缃腑蹇冦€嶅～鍐欙紙淇濆瓨鍗崇儹鏇存柊锛夈€?      # 鐜鍙橀噺浠呬綔棣栧惎鍏滃簳銆傜敓浜х幆澧冨缓璁嚦灏戣缃?ADMIN_TOKEN 涓?OAuth 涓夐」銆?      GITHUB_TOKENS: ${GITHUB_TOKENS:-}
       SYNC_TOPIC: ${SYNC_TOPIC:-dsh-plugin}
       SYNC_MAX_REPOS: ${SYNC_MAX_REPOS:-0}
       GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}

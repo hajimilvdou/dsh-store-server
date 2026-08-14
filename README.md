@@ -24,6 +24,8 @@ dsh-store-server/
 ├── admin/index.html      # 管理端面板（服务端托管于 /admin，接 admin API）
 ├── db/migrations/        # 迁移脚本（001~008 随版本递增）
 ├── scripts/update.sh     # 一键更新预置流水线
+├── scripts/deploy.sh     # compose 部署/升级（拉取失败自动回退本地构建）
+├── scripts/deploy-docker.sh  # 纯 docker 命令部署/构建（无需 compose，自动建库/迁移/起容器）
 ├── docker-compose.yml    # db + migrate + api + redis
 └── .env.example
 ```
@@ -48,8 +50,48 @@ npm run dev          # 启动（无 DATABASE_URL 时用内存仓库 + 假数据�
 
 ```bash
 cp .env.example .env      # 按注释填写占位符：DB_PASSWORD 必填；生产环境建议同时设置 ADMIN_TOKEN
-docker compose up -d      # 一条命令：装库 → 自动迁移 → 起服务
 ```
+
+### 方式 A：纯 docker 命令（无需 compose 插件，推荐）
+
+一条脚本自动完成：拉取/构建镜像 → 建网络与数据卷 → **自动创建并运行数据库容器** → 自动迁移 → **自动创建并运行主程序容器**（+ redis）→ 自检：
+
+```bash
+./scripts/deploy-docker.sh            # 拉取 GitHub Actions 构建好的 GHCR 镜像部署
+./scripts/deploy-docker.sh --build    # 改用本地 docker build 构建镜像后部署
+```
+
+容器清单（脚本自动创建，均 `--restart unless-stopped` 开机自愈）：`dshstore-db`（postgres:16-alpine，仅内网可见）、`dshstore-redis`、`dshstore-api`（映射 `${PORT:-8080}`）。管理端：`http://<服务器IP>:8080/admin`。
+
+等价的纯命令构建方式（不使用脚本时）：
+
+```bash
+docker build -t ghcr.io/hajimilvdou/dsh-store-server:latest .   # 命令方式构建镜像
+docker network create dshstore-net                               # 建网络
+docker run -d --name dshstore-db --network dshstore-net \
+  -v dshstore-pg:/var/lib/postgresql/data \
+  -e POSTGRES_USER=store -e POSTGRES_PASSWORD=<DB_PASSWORD> -e POSTGRES_DB=dshstore postgres:16-alpine
+docker run --rm --network dshstore-net \
+  -e DATABASE_URL=postgres://store:<DB_PASSWORD>@dshstore-db:5432/dshstore \
+  -e MIGRATIONS_DIR=/app/db/migrations \
+  ghcr.io/hajimilvdou/dsh-store-server:latest node dist/db/migrate.js
+docker run -d --name dshstore-api --network dshstore-net -p 8080:8080 \
+  -e DATABASE_URL=postgres://store:<DB_PASSWORD>@dshstore-db:5432/dshstore \
+  ghcr.io/hajimilvdou/dsh-store-server:latest
+```
+
+### 方式 B：docker compose
+
+```bash
+docker compose up -d            # 自动拉镜像（失败自动回退本地构建）：装库 → 迁移 → 起服务
+./scripts/deploy.sh             # 同上，拉取失败自动回退本地构建 + /health 自检
+```
+
+compose 常见失败排查：
+
+1. `docker compose` 命令不存在 → 机器没装 compose 插件，改用**方式 A**（纯 docker 命令）；
+2. 拉取报 `unauthorized / denied` → GHCR 镜像默认私有，先 `docker login ghcr.io -u <GitHub用户名> -p <PAT(read:packages)>`；
+3. 拉取报 `manifest unknown` → `.env` 里 `GH_IMAGE` 与仓库名不一致（本项目默认 `hajimilvdou/dsh-store-server`）。
 
 密钥不在部署时必填：搜索 token（可多枚）、OAuth Client ID/Secret、JWT 密钥、管理员密码、注册开关与注册方式，均可在管理端「**配置中心**」修改（**每项独立保存**，保存即热更新；JWT 更换后全员重新登录）。生产环境务必配置：
 
@@ -65,9 +107,10 @@ docker compose up -d      # 一条命令：装库 → 自动迁移 → 起服务
 上传到 GitHub 后，`.github/workflows/docker-build.yml` 自动构建镜像并推送到 **GHCR**（`ghcr.io/<owner>/<repo>`，镜像名已自动小写化，无需任何 Secrets，使用仓库自带 `GITHUB_TOKEN`）。服务器上无需构建：
 
 ```bash
-# .env 中设置：GH_IMAGE=你的GitHub用户名/仓库名
+# .env 中设置：GH_IMAGE=你的GitHub用户名/仓库名（本项目 = hajimilvdou/dsh-store-server）
 docker compose pull && docker compose up -d      # 或直接：
-./scripts/deploy.sh                              # 拉取镜像 → 迁移 → 启动 → /health 自检
+./scripts/deploy.sh                              # 拉取镜像 → 迁移 → 启动 → /health 自检（拉取失败自动回退本地构建）
+./scripts/deploy-docker.sh                       # 纯 docker 命令版（无需 compose 插件）
 ```
 
 > GHCR 镜像默认私有：服务器首次拉取前需登录一次（或到 GitHub 仓库的 Packages 设置里把镜像改为 Public）：
@@ -78,8 +121,8 @@ docker compose pull && docker compose up -d      # 或直接：
 服务器本地直接构建镜像（不走 GHCR）：
 
 ```bash
-docker compose build    # 或 docker build -t dsh-store-server .
-docker compose up -d
+./scripts/deploy-docker.sh --build   # 纯命令方式：docker build 后自动建库/迁移/起容器
+docker compose up -d --build         # 或 compose 本地构建
 ```
 
 ## 升级 / 迁移 / 回滚 / 备份
@@ -89,6 +132,7 @@ docker compose up -d
 git fetch --tags && git checkout <新版本> && docker compose up -d --build
 # 容器化部署升级：宿主机执行（管理面板「系统更新」在容器内会提示该命令）
 GH_IMAGE=你的GitHub用户名/仓库名 ./scripts/deploy.sh
+./scripts/deploy-docker.sh        # 纯 docker 命令部署方式：升级 = 重跑本脚本（自动拉新镜像并重建容器）
 
 # 迁移进度
 docker compose exec db psql -U store -d dshstore -c "SELECT version FROM schema_migrations ORDER BY version;"
