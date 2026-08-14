@@ -7,6 +7,7 @@ loadEnvFile()
 import { loadConfig } from './config.js'
 import { MemoryRepo } from './repo/memory.js'
 import { PgRepo } from './repo/pg.js'
+import type { Repo } from './repo/types.js'
 import { getPool, closeDb, dbEnabled } from './db/pool.js'
 import { registerRoutes } from './routes.js'
 import { AuthService } from './auth.js'
@@ -25,7 +26,34 @@ const runtime: RuntimeState = { clockDriftMs: 0, rateLimited: 0, authFailures: 0
 // 仓库选择：DATABASE_URL 就绪 → PostgreSQL（启动加载 + 写穿）；否则内存仓库。
 // 演示假数据仅在纯离线模式注入（无 GitHub token 且未配置 OAuth），生产不混入测试残留。
 const demo = !sync.enabled && !auth.enabled
-const repo = dbEnabled() ? await PgRepo.create(getPool(), demo) : new MemoryRepo(demo)
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+// 数据库启动窗口重试：容器编排里 db 可能晚于 api 就绪（DNS 未生效等），避免裸崩溃循环
+async function createRepoWithRetry(factory: () => Promise<Repo>, attempts = 8, delayMs = 3000): Promise<Repo> {
+  let lastErr: unknown = null
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await factory()
+    } catch (e) {
+      lastErr = e
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[db] 数据库连接失败（第 ${i}/${attempts} 次）：${msg}`)
+      if (i < attempts) await sleep(delayMs)
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+  console.error(
+    `[db] 数据库连接失败（已重试 ${attempts} 次）：${msg}\n` +
+      '排查：\n' +
+      '  1. api 与数据库容器必须处于同一 docker 网络：./scripts/deploy-docker.sh 已自动处理；\n' +
+      '     手工 docker run 时 api 与 db 都必须加 --network dshstore-net；\n' +
+      '  2. DATABASE_URL 的 host 必须是该网络内的数据库容器名（dshstore-db，脚本同时注册了别名 db）；\n' +
+      '  3. 确认数据库容器已就绪：docker ps | grep dshstore-db 与 docker logs dshstore-db。',
+  )
+  process.exit(1)
+}
+
+const repo: Repo = dbEnabled() ? await createRepoWithRetry(() => PgRepo.create(getPool(), demo)) : new MemoryRepo(demo)
 
 // 配置中心优先、部署环境变量兜底：密钥已从"部署时填写"迁移到"配置中心填写"，
 // 环境变量仅作首启默认值；管理端保存即热更新（routes PUT /admin/config）。

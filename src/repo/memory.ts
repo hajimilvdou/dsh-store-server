@@ -90,6 +90,14 @@ export class MemoryRepo implements Repo {
   }
 
   private seed(): void {
+    // 演示数据的作者与安装 spec（正式同步数据来自 GitHub 提取管线，不经过这里）
+    const DEMO_AUTHORS: Record<string, string> = {
+      'dsh-memory': 'liwei', 'dsh-web-ui': 'xiaoyu', 'dsh-cc-tui': 'vim_rock', 'dsh-browser-panel': 'datasci_hao',
+      'dsh-checkpoint': 'liwei', 'dsh-deep-research': 'datasci_hao', 'dsh-vision': 'xiaoyu', 'dsh-session-search': 'liwei',
+      'dsh-skins': 'xiaoyu', 'dsh-tool-regex': 'vim_rock', 'dsh-pet': 'xiaoyu', 'dsh-auto-chess': 'gamer_wang',
+      'dsh-data-agent': 'datasci_hao', 'dsh-a2a': 'liwei', 'dsh-rewind': 'liwei', 'dsh-kimi-browser': 'datasci_hao',
+      'dsh-tool-diff': 'vim_rock', 'dsh-session-hub': 'liwei', 'dsh-tool-encoding': 'vim_rock', 'dsh-gomoku': 'gamer_wang',
+    }
     this.plugins = RAW_PLUGINS.map(([id, description, stars, stars_delta_day, likes, source, isNew], i) => ({
       id,
       version: i === 0 ? '0.4.0' : '1.0.0',
@@ -106,6 +114,8 @@ export class MemoryRepo implements Repo {
       quality_score: Math.max(38, 92 - i * 3),
       tags: [],
       compat: 'dsh ≥0.1.0-rc.5',
+      author: DEMO_AUTHORS[id] ?? '社区',
+      install: `github:dsh-store/${id}`,
       is_new: isNew === 1,
       security: { level: 2, score: 90 + (i % 10), risk_tags: [], blocked: false },
       status: 'listed',

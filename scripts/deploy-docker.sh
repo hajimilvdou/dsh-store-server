@@ -57,9 +57,10 @@ docker volume inspect "$PG_VOL" >/dev/null 2>&1 || docker volume create "$PG_VOL
 docker volume inspect "$REDIS_VOL" >/dev/null 2>&1 || docker volume create "$REDIS_VOL"
 
 # 2) 数据库容器（自动创建；仅内网可见，不映射宿主机端口）
+#    --network-alias db：网络内 `db` 与 `dshstore-db` 两个主机名都能解析（兼容 compose 风格的 @db:5432 写法）
 step "启动数据库容器 dshstore-db（postgres:16-alpine）"
 docker rm -f dshstore-db >/dev/null 2>&1 || true
-docker run -d --name dshstore-db --network "$NET" --restart unless-stopped \
+docker run -d --name dshstore-db --network "$NET" --network-alias db --network-alias dshstore-db --restart unless-stopped \
   -v "$PG_VOL":/var/lib/postgresql/data \
   -e POSTGRES_USER=store -e POSTGRES_PASSWORD="$DB_PASSWORD" -e POSTGRES_DB=dshstore \
   postgres:16-alpine
@@ -116,5 +117,6 @@ if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
   docker ps --filter "name=dshstore-" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
   exit 0
 fi
-echo "✗ 自检失败，请查看日志：docker logs dshstore-api" >&2
+echo "✗ 自检失败，主程序最近日志（docker logs dshstore-api --tail 30）：" >&2
+docker logs dshstore-api --tail 30 >&2 || true
 exit 1

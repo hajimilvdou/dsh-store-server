@@ -62,7 +62,10 @@ function rowToPlugin(r: PluginRow): Plugin {
 function pluginToRow(p: Plugin): unknown[] {
   return [
     p.id, p.version, p.name, p.description, p.repo, p.repo_url, p.source, p.stars, p.stars_delta_day,
-    p.trending_rank, p.likes, p.downloads_7d, p.quality_score, JSON.stringify(p.tags), p.compat, p.author, p.install, p.is_new,
+    p.trending_rank, p.likes, p.downloads_7d, p.quality_score, JSON.stringify(p.tags), p.compat,
+    // author/install 列 NOT NULL：数据缺失时用安全占位，绝不落 NULL（否则首启种子落库直接崩溃）
+    p.author || '社区', p.install || '',
+    p.is_new,
     p.security.level, p.security.score, JSON.stringify(p.security.risk_tags), p.security.blocked, p.status, p.updated_at,
   ]
 }

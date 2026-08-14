@@ -91,7 +91,11 @@ compose 常见失败排查：
 
 1. `docker compose` 命令不存在 → 机器没装 compose 插件，改用**方式 A**（纯 docker 命令）；
 2. 拉取报 `unauthorized / denied` → GHCR 镜像默认私有，先 `docker login ghcr.io -u <GitHub用户名> -p <PAT(read:packages)>`；
-3. 拉取报 `manifest unknown` → `.env` 里 `GH_IMAGE` 与仓库名不一致（本项目默认 `hajimilvdou/dsh-store-server`）。
+3. 拉取报 `manifest unknown` → `.env` 里 `GH_IMAGE` 与仓库名不一致（本项目默认 `hajimilvdou/dsh-store-server`）；
+4. 主程序报 `getaddrinfo ENOTFOUND dshstore-db`（或 `db`）→ api 容器与数据库容器**不在同一 docker 网络**：
+   - 用 `./scripts/deploy-docker.sh` 一键部署（自动建网络并接线）；手工 `docker run` 时 api 与 db 都必须加 `--network dshstore-net`；
+   - 确认数据库容器在跑：`docker ps | grep dshstore-db`；
+5. 主程序日志出现 `null value in column "author"` → 镜像版本过旧（已修复），重新 `docker pull ghcr.io/hajimilvdou/dsh-store-server:latest` 或 `./scripts/deploy-docker.sh --build`。
 
 密钥不在部署时必填：搜索 token（可多枚）、OAuth Client ID/Secret、JWT 密钥、管理员密码、注册开关与注册方式，均可在管理端「**配置中心**」修改（**每项独立保存**，保存即热更新；JWT 更换后全员重新登录）。生产环境务必配置：
 
