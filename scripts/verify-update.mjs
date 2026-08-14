@@ -22,6 +22,12 @@ for (let i = 0; i < 24; i++) {
 }
 check('服务就绪', ok)
 
+// 0.5 首次设置密码端点：已配置口令时 → needs_setup=false 且 setup 拒绝（409）
+const sst = await call('/admin/setup/status')
+check('首次设置状态可读', sst.status === 200 && typeof sst.body.needs_setup === 'boolean', JSON.stringify(sst.body))
+const sup = await call('/admin/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'x12345678' }) })
+check('已配置口令时 setup 被拒(409)', sup.status === 409, `status=${sup.status}`)
+
 // 1. 默认不推送客户端插件版本
 const m0 = await call('/api/v1/manifest')
 check('manifest 含 client_plugin 字段', m0.body && 'client_plugin' in m0.body, JSON.stringify(m0.body.client_plugin))

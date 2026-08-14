@@ -72,7 +72,7 @@ export async function registerRoutes(
     // 管理员口令：配置中心优先 → 环境变量 ADMIN_TOKEN 兜底；两者皆空 → 管理端不可用（503），无硬编码默认口令
     const expected = repo.getConfig().admin.password || process.env.ADMIN_TOKEN || ''
     if (!expected) {
-      void reply.code(503).send({ error: 'not_configured', message: '管理员口令未配置：请设置环境变量 ADMIN_TOKEN 后重启，或先在纯离线演示模式下进入配置中心保存管理密码' })
+      void reply.code(503).send({ error: 'not_configured', message: '管理员口令未配置：刷新管理页即可进入「首次使用 · 设置密码」流程' })
       return false
     }
     if (req.headers['x-admin-token'] !== expected) {
@@ -94,6 +94,24 @@ export async function registerRoutes(
   }
   app.get('/admin', adminHtml)
   app.get('/admin/', adminHtml)
+
+  /* ================= 首次使用：设置管理员密码（口令未配置时开放，先到先得） ================= */
+  app.get('/admin/setup/status', async () => ({
+    needs_setup: !(repo.getConfig().admin.password || process.env.ADMIN_TOKEN || ''),
+  }))
+  app.post<{ Body: { password: string } }>('/admin/setup', async (req, reply) => {
+    if (repo.getConfig().admin.password || process.env.ADMIN_TOKEN) {
+      return reply.code(409).send({ error: 'already_configured', message: '管理员口令已配置（如需修改请登录后在配置中心「管理员」项修改）' })
+    }
+    const password = req.body?.password
+    if (typeof password !== 'string' || password.length < 8) {
+      return reply.code(400).send({ error: 'bad_request', message: '密码至少 8 位' })
+    }
+    const next: ServerConfig = { ...repo.getConfig(), admin: { ...repo.getConfig().admin, password } }
+    repo.setConfig(next)
+    repo.log('admin', 'setup.password', {})
+    return { ok: true }
+  })
 
   /* ================= GitHub OAuth（未配置凭据时 503 休眠） ================= */
   app.get<{ Querystring: { redirect?: string } }>('/auth/login', async (req, reply) => {

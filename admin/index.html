@@ -78,9 +78,17 @@ tr:hover td{background:var(--hover)}
 <div id="login">
   <div class="login-card">
     <h2>🛠 插件商城 · 管理端</h2>
-    <p>输入管理员凭证。生产环境：口令 = 环境变量 <b style="color:var(--brand2)">ADMIN_TOKEN</b> 或配置中心保存的管理密码；纯离线演示模式默认 <b style="color:var(--brand2)">mock-admin</b>。</p>
-    <input id="token" placeholder="管理员凭证（X-Admin-Token）" autocomplete="off">
-    <div class="row"><button class="abtn pri" style="flex:1" onclick="login()">进入管理端</button></div>
+    <div id="loginFields">
+      <p>输入管理员凭证。口令 = 环境变量 <b style="color:var(--brand2)">ADMIN_TOKEN</b> 或配置中心保存的管理密码；纯离线演示模式默认 <b style="color:var(--brand2)">mock-admin</b>。</p>
+      <input id="token" placeholder="管理员凭证（X-Admin-Token）" autocomplete="off">
+      <div class="row"><button class="abtn pri" style="flex:1" onclick="login()">进入管理端</button></div>
+    </div>
+    <div id="setupFields" style="display:none">
+      <p>🔐 <b>首次使用</b>：设置管理员密码（≥8 位）。设置后立即生效并进入管理端；请妥善保管，忘记需重置数据库配置。</p>
+      <input id="setupPass" type="password" placeholder="设置管理员密码（至少 8 位）" autocomplete="new-password">
+      <input id="setupPass2" type="password" placeholder="再次输入确认" autocomplete="new-password" style="margin-top:8px">
+      <div class="row"><button class="abtn pri" style="flex:1" onclick="setupPassword()">设置并进入管理端</button></div>
+    </div>
     <div id="loginErr" class="msg" style="color:var(--danger);display:none"></div>
   </div>
 </div>
@@ -130,18 +138,56 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 function showLogin() {
   document.getElementById('login').style.display = 'flex'
   document.getElementById('app').style.display = 'none'
+  checkSetup()
+}
+/** 口令未配置时切换到「首次使用 · 设置密码」表单 */
+async function checkSetup() {
+  try {
+    const res = await fetch('/admin/setup/status')
+    const b = await res.json()
+    const needs = !!b.needs_setup
+    document.getElementById('setupFields').style.display = needs ? 'block' : 'none'
+    document.getElementById('loginFields').style.display = needs ? 'none' : 'block'
+  } catch {
+    document.getElementById('setupFields').style.display = 'none'
+    document.getElementById('loginFields').style.display = 'block'
+  }
+}
+function loginErr(text) {
+  const err = document.getElementById('loginErr')
+  err.textContent = text
+  err.style.display = 'block'
+}
+function enterPanel() {
+  document.getElementById('login').style.display = 'none'
+  document.getElementById('app').style.display = 'flex'
+  page(currentPage)
+}
+async function setupPassword() {
+  const p1 = document.getElementById('setupPass').value
+  const p2 = document.getElementById('setupPass2').value
+  if (p1.length < 8) return loginErr('密码至少 8 位')
+  if (p1 !== p2) return loginErr('两次输入的密码不一致')
+  try {
+    const res = await fetch('/admin/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: p1 }),
+    })
+    const b = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(b.message || res.statusText)
+    adminToken = p1
+    localStorage.setItem(TOKEN_KEY, p1)
+    enterPanel()
+  } catch (e) {
+    loginErr('设置失败：' + e.message)
+  }
 }
 function login() {
   adminToken = document.getElementById('token').value.trim()
   localStorage.setItem(TOKEN_KEY, adminToken)
-  api('/admin/stats').then(() => {
-    document.getElementById('login').style.display = 'none'
-    document.getElementById('app').style.display = 'flex'
-    page(currentPage)
-  }).catch((e) => {
-    const err = document.getElementById('loginErr')
-    err.textContent = '凭证无效：' + e.message
-    err.style.display = 'block'
+  api('/admin/stats').then(enterPanel).catch((e) => {
+    loginErr('凭证无效：' + e.message)
   })
 }
 function logout() {
@@ -608,11 +654,7 @@ function saveCfg() {
 }
 
 if (adminToken) {
-  api('/admin/stats').then(() => {
-    document.getElementById('login').style.display = 'none'
-    document.getElementById('app').style.display = 'flex'
-    page('dash')
-  }).catch(showLogin)
+  api('/admin/stats').then(enterPanel).catch(showLogin)
 }
 </script>
 </body>

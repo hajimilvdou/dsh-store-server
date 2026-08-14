@@ -118,7 +118,7 @@ compose 常见失败排查：
 
 密钥不在部署时必填：搜索 token（可多枚）、OAuth Client ID/Secret、JWT 密钥、管理员密码、注册开关与注册方式，均可在管理端「**配置中心**」修改（**每项独立保存**，保存即热更新；JWT 更换后全员重新登录）。生产环境务必配置：
 
-1. `ADMIN_TOKEN`（强随机值，否则管理端 503 不可用）；
+1. 管理员口令：**首次打开管理页自动进入「首次使用 · 设置管理员密码」流程**（≥8 位，先到先得，部署后请尽快设置）；也可提前用 `ADMIN_TOKEN` 环境变量指定；
 2. `GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET / JWT_SECRET`（GitHub 登录）；
 3. `OAUTH_CALLBACK_URL`（反代/域名场景，需与 OAuth App 注册的回调地址完全一致）；
 4. `GITHUB_TOKENS`（同步抓取 token 池）。
