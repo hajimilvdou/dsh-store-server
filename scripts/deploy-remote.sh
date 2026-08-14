@@ -28,6 +28,15 @@ NET="dshstore-net"
 PG_VOL="dshstore-pg"
 REDIS_VOL="dshstore-redis"
 
+# 参数：--reset-db = 删除旧数据库数据卷重新初始化（旧密码对不上 / 数据损坏时用）
+RESET_DB=0
+for _a in "$@"; do
+  case "$_a" in
+    --reset-db) RESET_DB=1 ;;
+    *) echo "未知参数：$_a（支持 --reset-db）" >&2; exit 2 ;;
+  esac
+done
+
 # 首次运行：数据库密码自动生成并持久化到 .env（重跑/重启不丢库）
 if ! grep -q '^DB_PASSWORD=' .env 2>/dev/null; then
   if [[ -z "${DB_PASSWORD:-}" ]]; then
@@ -53,6 +62,10 @@ docker volume inspect "$REDIS_VOL" >/dev/null 2>&1 || docker volume create "$RED
 
 step "③ 启动数据库容器 dshstore-db（网络内别名：db / dshstore-db）"
 docker rm -f dshstore-db >/dev/null 2>&1 || true
+if [[ $RESET_DB -eq 1 ]]; then
+  step "③.1 重置数据库（删除旧数据卷，数据将被清空）"
+  docker volume rm "$PG_VOL" >/dev/null 2>&1 || true
+fi
 docker run -d --name dshstore-db --network "$NET" --network-alias db --network-alias dshstore-db --restart unless-stopped \
   -v "$PG_VOL":/var/lib/postgresql/data \
   -e POSTGRES_USER=store -e POSTGRES_PASSWORD="$DB_PASSWORD" -e POSTGRES_DB=dshstore \
@@ -72,10 +85,19 @@ docker run -d --name dshstore-redis --network "$NET" --restart unless-stopped \
   -v "$REDIS_VOL":/data redis:7-alpine
 
 step "⑥ 数据库迁移（一次性容器）"
-docker run --rm --name dshstore-migrate --network "$NET" \
+if ! docker run --rm --name dshstore-migrate --network "$NET" \
   -e DATABASE_URL="postgres://store:${DB_PASSWORD}@dshstore-db:5432/dshstore" \
   -e MIGRATIONS_DIR=/app/db/migrations \
-  "$IMAGE" node dist/db/migrate.js
+  "$IMAGE" node dist/db/migrate.js; then
+  echo "✗ 迁移失败。" >&2
+  echo "  常见原因：数据库数据卷是旧密码初始化的（postgres 只认首次初始化时的密码）。" >&2
+  echo "  修复（重置数据库，旧数据将被清空）后重跑本脚本：" >&2
+  echo "    docker rm -f dshstore-db && docker volume rm dshstore-pg" >&2
+  echo "  或一条命令（新版脚本支持 --reset-db）：" >&2
+  echo "    curl -fsSL https://raw.githubusercontent.com/hajimilvdou/dsh-store-server/main/scripts/deploy-remote.sh | bash -s -- --reset-db" >&2
+  echo "  或改回旧密码：编辑 .env 的 DB_PASSWORD=首次初始化时的密码 后重跑。" >&2
+  exit 5
+fi
 
 step "⑦ 启动主程序容器 dshstore-api（端口 ${PORT}）"
 docker rm -f dshstore-api >/dev/null 2>&1 || true

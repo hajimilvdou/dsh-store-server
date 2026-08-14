@@ -34,7 +34,14 @@ NET="dshstore-net"
 PG_VOL="dshstore-pg"
 REDIS_VOL="dshstore-redis"
 BUILD_LOCAL=0
-[[ "${1:-}" == "--build" ]] && BUILD_LOCAL=1
+RESET_DB=0
+for _a in "$@"; do
+  case "$_a" in
+    --build) BUILD_LOCAL=1 ;;
+    --reset-db) RESET_DB=1 ;;
+    *) echo "未知参数：$_a（支持 --build / --reset-db）" >&2; exit 2 ;;
+  esac
+done
 
 step() { echo "==> $*"; }
 
@@ -60,6 +67,10 @@ docker volume inspect "$REDIS_VOL" >/dev/null 2>&1 || docker volume create "$RED
 #    --network-alias db：网络内 `db` 与 `dshstore-db` 两个主机名都能解析（兼容 compose 风格的 @db:5432 写法）
 step "启动数据库容器 dshstore-db（postgres:16-alpine）"
 docker rm -f dshstore-db >/dev/null 2>&1 || true
+if [[ $RESET_DB -eq 1 ]]; then
+  step "重置数据库（删除旧数据卷，数据将被清空）"
+  docker volume rm "$PG_VOL" >/dev/null 2>&1 || true
+fi
 docker run -d --name dshstore-db --network "$NET" --network-alias db --network-alias dshstore-db --restart unless-stopped \
   -v "$PG_VOL":/var/lib/postgresql/data \
   -e POSTGRES_USER=store -e POSTGRES_PASSWORD="$DB_PASSWORD" -e POSTGRES_DB=dshstore \

@@ -199,6 +199,13 @@ export class PgRepo extends MemoryRepo {
       await client.query('DELETE FROM federation_relations')
       await client.query('DELETE FROM star_snapshots')
       await client.query('DELETE FROM risk_likes')
+      // 先落用户再落安装清单：user_installs.user_id 外键引用 users(id)，顺序颠倒会违反外键
+      for (const u of this.users) {
+        await client.query(
+          'INSERT INTO users (id, github_id, login, name, home_server, status, registered_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',
+          [u.id, u.github_id, u.login, u.name, u.home_server, u.status, u.registered_at],
+        )
+      }
       for (const p of this.plugins) {
         await client.query(`INSERT INTO plugins (${PLUGIN_COLS}) VALUES (${PLUGIN_PLACEHOLDERS})`, pluginToRow(p))
       }
