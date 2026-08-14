@@ -13,7 +13,7 @@ import { registerRoutes } from './routes.js'
 import { AuthService } from './auth.js'
 import { GithubSync } from './sync/github.js'
 import { AlertService, installGuards, type RuntimeState } from './security/guard.js'
-import { UpdateService, serverVersionTag } from './update.js'
+import { UpdateService, deployedVersionTag, normVersionTag } from './update.js'
 import { checkClockDrift } from './clock.js'
 
 const config = loadConfig(process.env)
@@ -21,11 +21,12 @@ const config = loadConfig(process.env)
 const auth = new AuthService(process.env)
 const sync = new GithubSync(process.env)
 const alerts = new AlertService(config.alert.webhook)
-const runtime: RuntimeState = { clockDriftMs: 0, rateLimited: 0, authFailures: 0, blockedRequests: 0, apiRequests: 0, apiErrors: 0, latestRelease: null }
+const runtime: RuntimeState = { clockDriftMs: 0, rateLimited: 0, authFailures: 0, blockedRequests: 0, apiRequests: 0, apiErrors: 0, latestRelease: null, latestCommit: null }
 
 // 仓库选择：DATABASE_URL 就绪 → PostgreSQL（启动加载 + 写穿）；否则内存仓库。
-// 演示假数据仅在纯离线模式注入（无 GitHub token 且未配置 OAuth），生产不混入测试残留。
-const demo = !sync.enabled && !auth.enabled
+// 演示假数据仅注入「纯内存且纯离线」模式（无数据库、无 GitHub token、未配置 OAuth）：
+// 只要挂了数据库就是正式数据面，刚部署的空库保持为空，直到配置 GITHUB_TOKENS 同步后才有插件。
+const demo = !dbEnabled() && !sync.enabled && !auth.enabled
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 // 数据库启动窗口重试：容器编排里 db 可能晚于 api 就绪（DNS 未生效等），避免裸崩溃循环
@@ -112,28 +113,35 @@ if (!sync.enabled && !auth.enabled) {
   app.log.warn('注意：管理口令强度不足会削弱安全；建议使用强随机值（可通过 ADMIN_TOKEN 或配置中心设置）')
 }
 
-// GitHub 同步调度：有 token 时启动即跑一次，之后按配置间隔（默认 24h）
-if (sync.enabled) {
-  void sync.runSync(repo.syncTarget()).then(() => repo.persistSync())
-  const intervalMs = Math.max(5, config.sync.github_fetch_interval_h) * 3600_000
-  setInterval(() => void sync.runSync(repo.syncTarget()).then(() => repo.persistSync()), intervalMs)
-  app.log.info(`GitHub 同步已启用（topic:${sync.topic}，token ×${sync.status.tokens}，间隔 ${config.sync.github_fetch_interval_h}h）`)
-} else {
-  app.log.warn('未配置 GITHUB_TOKENS：GitHub 同步与 OAuth 登录休眠（管理端 /admin/sync 可查看状态）')
+// GitHub 同步调度：常驻自检——配置中心保存 token 后无需重启即可同步（每轮读最新配置）
+const scheduleSync = (): void => {
+  void (async () => {
+    if (sync.enabled) {
+      void sync.runSync(repo.syncTarget()).then(() => repo.persistSync())
+    }
+  })().finally(() => {
+    const hours = Math.max(1, repo.getConfig().sync.github_fetch_interval_h)
+    setTimeout(scheduleSync, hours * 3600_000)
+  })
 }
+scheduleSync()
 
-// 本项目更新提醒（v3.7 V1）：按配置间隔检测最新 Release，只提醒不自动更。
-// 仓库地址/间隔在配置中心或系统更新页修改后下一轮检测即生效（每轮动态读取配置）。
+// 本项目更新提醒（v3.7 V1）：按配置间隔检测，只提醒不自动更。
+// 跟踪通道（release / commit）与仓库地址、间隔在配置中心修改后下一轮检测即生效（每轮动态读取配置）。
 const scheduleReleaseCheck = (): void => {
   void (async () => {
     const live = repo.getConfig()
     const repoUrl = live.update.repo_url
     if (!repoUrl) return
-    const latest = await sync.checkLatestRelease(repoUrl)
-    runtime.latestRelease = latest
-    const current = serverVersionTag()
-    if (latest?.tag && latest.tag !== current) {
-      void alerts.send('发现新版本', `本项目最新 Release：${latest.tag}（${latest.published_at ?? '—'}）`)
+    if (live.update.track === 'commit') {
+      runtime.latestCommit = await sync.checkLatestCommit(repoUrl)
+    } else {
+      const latest = await sync.checkLatestRelease(repoUrl)
+      runtime.latestRelease = latest
+      const current = deployedVersionTag()
+      if (latest?.tag && normVersionTag(latest.tag) !== normVersionTag(current)) {
+        void alerts.send('发现新版本', `本项目最新 Release：${normVersionTag(latest.tag)}（${latest.published_at ?? '—'}）`)
+      }
     }
   })().finally(() => {
     const mins = Math.max(5, repo.getConfig().update.check_interval_min)

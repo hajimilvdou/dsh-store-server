@@ -21,7 +21,7 @@ import type { GithubSync } from './sync/github.js'
 import { scanPlugin } from './security/scan.js'
 import type { AlertService, RuntimeState } from './security/guard.js'
 import type { UpdateService } from './update.js'
-import { serverVersion, serverVersionTag } from './update.js'
+import { serverVersion, deployedVersionTag, normVersionTag } from './update.js'
 
 interface AuthUser {
   userId: string
@@ -499,8 +499,13 @@ export async function registerRoutes(
     if (!next.admin.password) next.admin.password = process.env.ADMIN_TOKEN ?? ''
     repo.setConfig(next)
     // 密钥即时热更新：同步 token 池、OAuth/JWT、管理端口令全部生效
+    const wasSyncEnabled = sync.enabled
     sync.setTokens(next.sync.github_tokens)
     auth.configure({ clientId: next.auth.github_client_id, clientSecret: next.auth.github_client_secret, jwtSecret: next.auth.jwt_secret })
+    // 首次配置 token（从未启用 → 启用）：立即触发一次同步，无需重启
+    if (!wasSyncEnabled && sync.enabled) {
+      void sync.runSync(repo.syncTarget()).then(() => repo.persistSync())
+    }
     repo.log('admin', 'config.update', {})
     return repo.getConfig()
   })
@@ -543,8 +548,10 @@ export async function registerRoutes(
     return {
       ...repo.getUpdateState(),
       latest_release: runtime.latestRelease,
+      latest_commit: runtime.latestCommit,
+      track: repo.getConfig().update.track,
       repo_url: repo.getConfig().update.repo_url,
-      current_version: serverVersionTag(),
+      current_version: deployedVersionTag(),
     }
   })
   app.post('/admin/update/check', async (req, reply) => {
@@ -553,18 +560,32 @@ export async function registerRoutes(
     if (!repoUrl) {
       return reply.code(400).send({ error: 'not_configured', message: '请先在下方「检测源」填写本项目 GitHub 仓库地址并保存（如 https://github.com/your-org/dsh-store-server）' })
     }
+    const track = repo.getConfig().update.track
+    const current = deployedVersionTag()
+    if (track === 'commit') {
+      const c = await sync.checkLatestCommit(repoUrl)
+      runtime.latestCommit = c
+      repo.log('admin', 'update.check', { track, repo_url: repoUrl, sha: c?.sha ?? null })
+      if (!c) {
+        return { mode: 'commit', latest_commit: null, current_version: current, has_update: false, message: '检测失败：无法访问 GitHub（请确认网络可访问、已配置 GITHUB_TOKENS、仓库地址正确）' }
+      }
+      return { mode: 'commit', latest_commit: c, current_version: current, has_update: c.sha !== current, message: `最新提交 ${c.sha.slice(0, 7)}：${(c.message ?? '').split('\n')[0].slice(0, 60)}` }
+    }
     const latest = await sync.checkLatestRelease(repoUrl)
     runtime.latestRelease = latest
-    repo.log('admin', 'update.check', { repo_url: repoUrl, tag: latest?.tag ?? null })
-    const current = serverVersionTag()
-    const hasUpdate = !!latest?.tag && latest.tag !== current
-    if (latest?.tag && !hasUpdate) {
-      return { latest_release: latest, current_version: current, has_update: false, message: `已是最新版本（当前 ${current}）` }
+    repo.log('admin', 'update.check', { track, repo_url: repoUrl, tag: latest?.tag ?? null })
+    if (!latest?.tag) {
+      return { mode: 'release', latest_release: null, current_version: current, has_update: false, message: '检测失败：无法访问 GitHub Releases（请确认网络可访问、已配置 GITHUB_TOKENS、仓库地址正确且已发布 Release）' }
     }
-    if (latest?.tag && hasUpdate) {
-      return { latest_release: latest, current_version: current, has_update: true, message: `发现新版本 ${latest.tag}（当前 ${current}）` }
+    const tag = normVersionTag(latest.tag)
+    const hasUpdate = normVersionTag(current) !== tag
+    return {
+      mode: 'release',
+      latest_release: { ...latest, tag },
+      current_version: current,
+      has_update: hasUpdate,
+      message: hasUpdate ? `发现新版本 ${tag}（当前 ${current}）` : `已是最新版本（当前 ${tag}）`,
     }
-    return { latest_release: null, current_version: current, has_update: false, message: '检测失败：无法访问 GitHub Releases（请确认网络可访问、已配置 GITHUB_TOKENS、仓库地址正确且已发布 Release）' }
   })
   app.get('/admin/sync', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
@@ -582,10 +603,16 @@ export async function registerRoutes(
   app.post<{ Body: { version: string } }>(API.adminUpdate, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const version = req.body?.version
-    if (typeof version !== 'string' || !/^v\d+\.\d+\.\d+$/.test(version)) {
-      return reply.code(400).send({ error: 'bad_request', message: '版本号需匹配 ^v\\d+.\\d+.\\d+' })
+    const track = repo.getConfig().update.track
+    // release 通道：v 前缀版本 tag（两位或三位，如 v0.1 / v0.1.0）；commit 通道：分支名或 commit sha（如 main）
+    const valid = track === 'commit'
+      ? typeof version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/.test(version)
+      : typeof version === 'string' && /^v\d+\.\d+(\.\d+)?$/.test(version)
+    if (!valid) {
+      const hint = track === 'commit' ? '分支名或 commit sha（如 main）' : '版本号需匹配 ^v\\d+.\\d+(.\\d+)?（如 v0.1.0 或 v0.1）'
+      return reply.code(400).send({ error: 'bad_request', message: hint })
     }
-    repo.log('admin', 'update.run', { version })
+    repo.log('admin', 'update.run', { version, track })
     // 在线一键更新：真实执行 scripts/update.sh（git 拉取 → 构建 → 迁移 → 切换 → 自检 → 失败回滚）
     const state = await updater.run(version)
     if (state.stage === 'failed') {

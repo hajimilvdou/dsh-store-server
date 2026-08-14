@@ -99,12 +99,46 @@ if ! docker run --rm --name dshstore-migrate --network "$NET" \
   exit 5
 fi
 
-step "⑦ 启动主程序容器 dshstore-api（端口 ${PORT}）"
+step "⑥.5 生成容器重建脚本（供管理面板「一键更新」热更新使用）"
+mkdir -p /opt/dsh-store
+cat > /opt/dsh-store/api.run.sh <<RUNEOF
+#!/usr/bin/env bash
+set -euo pipefail
+IMAGE="\${1:-${IMAGE}}"
+docker run -d --name dshstore-api --network "${NET}" --restart unless-stopped \\
+  -p "${PORT}:8080" \\
+  -v /var/run/docker.sock:/var/run/docker.sock \\
+  -v /opt/dsh-store:/opt/dsh-store \\
+  -e DATABASE_URL="postgres://store:${DB_PASSWORD}@dshstore-db:5432/dshstore" \\
+  -e PORT=8080 -e HOST=0.0.0.0 \\
+  -e GH_IMAGE="${GH_IMAGE}" -e TAG="${TAG}" -e NET="${NET}" \\
+  -e GITHUB_TOKENS="${GITHUB_TOKENS:-}" \\
+  -e SYNC_TOPIC="${SYNC_TOPIC:-dsh-plugin}" \\
+  -e SYNC_MAX_REPOS="${SYNC_MAX_REPOS:-0}" \\
+  -e GITHUB_OAUTH_CLIENT_ID="${GITHUB_OAUTH_CLIENT_ID:-}" \\
+  -e GITHUB_OAUTH_CLIENT_SECRET="${GITHUB_OAUTH_CLIENT_SECRET:-}" \\
+  -e OAUTH_CALLBACK_URL="${OAUTH_CALLBACK_URL:-}" \\
+  -e JWT_SECRET="${JWT_SECRET:-}" \\
+  -e ADMIN_TOKEN="${ADMIN_TOKEN:-}" \\
+  -e ACCESS_PASSWORD="${ACCESS_PASSWORD:-}" \\
+  -e FEDERATION_ENABLED="${FEDERATION_ENABLED:-true}" \\
+  -e FEDERATION_SECRET="${FEDERATION_SECRET:-}" \\
+  -e UPDATE_REPO_URL="${UPDATE_REPO_URL:-https://github.com/hajimilvdou/dsh-store-server}" \\
+  -e CLUSTER_ID="${CLUSTER_ID:-}" \\
+  "\$IMAGE"
+RUNEOF
+chmod 700 /opt/dsh-store/api.run.sh
+echo "${IMAGE}" > /opt/dsh-store/api.current-image
+
+step "⑦ 启动主程序容器 dshstore-api（端口 ${PORT} · 挂载 docker socket 支持面板一键热更新）"
 docker rm -f dshstore-api >/dev/null 2>&1 || true
 docker run -d --name dshstore-api --network "$NET" --restart unless-stopped \
   -p "${PORT}:8080" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/dsh-store:/opt/dsh-store \
   -e DATABASE_URL="postgres://store:${DB_PASSWORD}@dshstore-db:5432/dshstore" \
   -e PORT=8080 -e HOST=0.0.0.0 \
+  -e GH_IMAGE="${GH_IMAGE}" -e TAG="${TAG}" -e NET="${NET}" \
   -e GITHUB_TOKENS="${GITHUB_TOKENS:-}" \
   -e SYNC_TOPIC="${SYNC_TOPIC:-dsh-plugin}" \
   -e SYNC_MAX_REPOS="${SYNC_MAX_REPOS:-0}" \

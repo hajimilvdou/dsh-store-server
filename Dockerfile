@@ -10,8 +10,8 @@ RUN npm run build && npm prune --omit=dev
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-# bash/curl/git：update.sh 预置脚本与自检依赖（容器内一键更新会提示在宿主机执行 deploy.sh）
-RUN apk add --no-cache bash curl git
+# bash/curl/git：update.sh 预置脚本与自检依赖；docker-cli：容器内面板一键热更新（走挂载的宿主 socket）
+RUN apk add --no-cache bash curl git docker-cli
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
 COPY --from=build /app/package.json package.json

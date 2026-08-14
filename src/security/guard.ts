@@ -39,6 +39,8 @@ export interface RuntimeState {
   apiRequests: number
   apiErrors: number
   latestRelease: { tag: string | null; name: string | null; published_at: string | null; body: string | null } | null
+  /** 跟踪通道 = commit 时的最新提交检测结果。 */
+  latestCommit: { sha: string; message: string | null; at: string | null } | null
 }
 
 /**

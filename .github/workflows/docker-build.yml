@@ -41,6 +41,7 @@ jobs:
           images: ${{ steps.reg.outputs.image }}
           tags: |
             type=ref,event=branch
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}

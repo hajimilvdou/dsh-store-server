@@ -123,7 +123,11 @@ compose 常见失败排查：
 3. `OAUTH_CALLBACK_URL`（反代/域名场景，需与 OAuth App 注册的回调地址完全一致）；
 4. `GITHUB_TOKENS`（同步抓取 token 池）。
 
-管理端「🔄 系统更新」页：手动**一键检测** GitHub 最新 Release + 检测源保存 + 一键在线更新（失败自动回滚）+ **客户端插件版本推送**（版本号 + 安装地址，支持 `github:owner/repo` / `npm:包名` / 直链 tgz 三种写法，页面内附示例）。
+管理端「🔄 系统更新」页：手动**一键检测** GitHub 最新 Release + 检测源保存 + **一键在线更新**（容器部署走面板热更新：拉新镜像自动重建容器、失败自动回滚；宿主机 git 部署走 git 拉取→构建→迁移→切换→自检→回滚）+ **客户端插件版本推送**（版本号 + 安装地址，支持 `github:owner/repo` / `npm:包名` / 直链 tgz 三种写法，页面内附示例）。
+
+> ⚠️ 面板热更新依赖把宿主 docker socket 挂进 api 容器（`deploy-remote.sh` / `deploy-docker.sh` 默认挂载）。
+> 含义：拿到管理端口令即具备操作宿主机 docker 的能力，请务必保管好管理员密码；如不需要面板热更新，删除脚本中
+> `-v /var/run/docker.sock:/var/run/docker.sock` 两行后重跑即可（此时面板会提示在宿主机执行更新命令）。
 
 ### GitHub Actions 构建 → 服务器直接拉取
 
@@ -154,9 +158,11 @@ docker compose up -d --build         # 或 compose 本地构建
 ```bash
 # 升级（宿主机 git 检出部署：管理面板「系统更新」一键更新，失败自动回滚）
 git fetch --tags && git checkout <新版本> && docker compose up -d --build
-# 容器化部署升级：宿主机执行（管理面板「系统更新」在容器内会提示该命令）
+# 容器化部署升级：推荐直接点管理面板「系统更新 → 一键更新」（面板热更新，免登录服务器）
+# 或宿主机执行：
 GH_IMAGE=你的GitHub用户名/仓库名 ./scripts/deploy.sh
 ./scripts/deploy-docker.sh        # 纯 docker 命令部署方式：升级 = 重跑本脚本（自动拉新镜像并重建容器）
+./scripts/deploy-remote.sh        # 远程一键部署：升级 = 重跑（同上）
 
 # 迁移进度
 docker compose exec db psql -U store -d dshstore -c "SELECT version FROM schema_migrations ORDER BY version;"

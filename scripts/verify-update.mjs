@@ -50,6 +50,7 @@ check('一键更新进入真实执行器', upd.status === 500 && upd.body.stage 
 const st = await call('/admin/update/status', { headers: H })
 check('更新状态含错误说明', typeof st.body.error === 'string' && st.body.error.length > 0, String(st.body.error).slice(0, 60))
 check('更新状态含当前版本', typeof st.body.current_version === 'string' && st.body.current_version.startsWith('v'), st.body.current_version)
+check('更新状态含跟踪通道', typeof st.body.track === 'string' && ['release', 'commit'].includes(st.body.track), st.body.track)
 
 // 4.5 手动一键检测（未配置仓库地址 → 400 + 明确提示；已配置 → 200 + latest_release）
 const chk = await call('/admin/update/check', { method: 'POST', headers: H, body: JSON.stringify({}) })
@@ -60,6 +61,7 @@ check('手动一键检测接口', chkOk, `status=${chk.status} ${String(chk.body
 const page = await fetch(BASE + '/admin').then((r) => r.text())
 check('管理页含版本横幅逻辑', page.includes('updateBanner') && page.includes('服务端有新版本'))
 check('管理页含一键检测与客户端推送', page.includes('一键检测') && page.includes('客户端插件版本推送'))
+check('管理页含跟踪通道文案', page.includes('跟踪通道') && page.includes('commit 通道'))
 check('管理页含配置项独立保存', page.includes('saveField'))
 
 console.log(failed === 0 ? '\n全部通过 ✅（版本推送专项）' : `\n${failed} 项失败 ❌`)

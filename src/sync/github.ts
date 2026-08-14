@@ -352,14 +352,37 @@ export class GithubSync {
     return { changed }
   }
 
+  /** GitHub API 请求（失败自动重试一次：网络抖动时第一次失败第二次成功是常态）。 */
+  private async ghRetry(path: string): Promise<Response | null> {
+    let res = await this.gh(path)
+    if (res) return res
+    await new Promise((r) => setTimeout(r, 800))
+    res = await this.gh(path)
+    return res
+  }
+
   /** 检测本项目最新 Release（v3.7 V1：只提醒不自动更，升级动作由管理员触发）。 */
   async checkLatestRelease(repoUrl: string): Promise<ReleaseInfo | null> {
     const m = (repoUrl || '').match(/github\.com\/([^/]+)\/([^/]+)/)
     if (!m) return null
-    const res = await this.gh(`/repos/${m[1]}/${m[2]}/releases/latest`)
+    const res = await this.ghRetry(`/repos/${m[1]}/${m[2]}/releases/latest`)
     if (!res) return null
     const data = (await res.json().catch(() => null)) as { tag_name?: string; name?: string | null; published_at?: string; body?: string | null } | null
     if (!data) return null
     return { tag: data.tag_name ?? null, name: data.name ?? null, published_at: data.published_at ?? null, body: data.body ?? null }
+  }
+
+  /** 检测默认分支最新提交（跟踪通道 = commit 时使用）。 */
+  async checkLatestCommit(repoUrl: string): Promise<{ sha: string; message: string | null; at: string | null } | null> {
+    const m = (repoUrl || '').match(/github\.com\/([^/]+)\/([^/]+)/)
+    if (!m) return null
+    const infoRes = await this.ghRetry(`/repos/${m[1]}/${m[2]}`)
+    const info = infoRes ? ((await infoRes.json().catch(() => null)) as { default_branch?: string } | null) : null
+    const branch = info?.default_branch ?? 'main'
+    const res = await this.ghRetry(`/repos/${m[1]}/${m[2]}/commits/${branch}`)
+    if (!res) return null
+    const data = (await res.json().catch(() => null)) as { sha?: string; commit?: { message?: string; committer?: { date?: string | null } | null } | null } | null
+    if (!data?.sha) return null
+    return { sha: data.sha, message: data.commit?.message ?? null, at: data.commit?.committer?.date ?? null }
   }
 }

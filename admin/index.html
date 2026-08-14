@@ -209,15 +209,21 @@ function page(p) {
   checkUpdateBanner()
 }
 
-/* 服务端版本横幅：GitHub 检测到新 Release 且与当前运行版本不同 → 顶部横幅 + 一键跳转更新页 */
+/* 服务端版本横幅：按跟踪通道（release/commit）显示检测结果 → 顶部横幅 + 一键跳转更新页 */
+const vtag = (t) => (t && !String(t).startsWith('v') ? 'v' + t : t)
 function checkUpdateBanner() {
   const el = document.getElementById('updateBanner')
   if (!el || !adminToken) return
   api('/admin/update/status').then((st) => {
-    const tag = st.latest_release && st.latest_release.tag
-    if (tag && st.current_version && tag !== st.current_version) {
+    const isCommit = st.track === 'commit'
+    const latest = isCommit
+      ? (st.latest_commit ? st.latest_commit.sha.slice(0, 7) : null)
+      : (st.latest_release && st.latest_release.tag ? vtag(st.latest_release.tag) : null)
+    if (latest && st.current_version && latest !== st.current_version) {
       el.style.display = 'flex'
-      el.innerHTML = `🆕 服务端有新版本 <b>${esc(tag)}</b>（当前运行 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
+      el.innerHTML = isCommit
+        ? `🆕 服务端有新提交 <b>${esc(latest)}</b>（当前部署 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
+        : `🆕 服务端有新版本 <b>${esc(latest)}</b>（当前运行 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
     } else {
       el.style.display = 'none'
     }
@@ -331,11 +337,17 @@ RENDER.fed = async () => {
 
 RENDER.upd = async () => {
   const [st, cfg] = await Promise.all([api('/admin/update/status'), api('/admin/config')])
-  const latest = st.latest_release && st.latest_release.tag ? st.latest_release.tag : ''
-  return `<div class="a-title">🔄 系统更新 <small>（服务端版本监控 · 手动一键检测 · 检测到新 Release 顶部横幅提醒 · 一键在线更新 · 失败自动回滚）</small></div>
+  const isCommit = cfg.update.track === 'commit'
+  const latestRelease = st.latest_release && st.latest_release.tag ? vtag(st.latest_release.tag) : ''
+  const latestCommit = st.latest_commit ? st.latest_commit.sha : ''
+  const target = isCommit ? 'main' : latestRelease
+  const latestRow = isCommit
+    ? `<tr><th>最新提交（${esc(cfg.update.track)} 通道）</th><td>${latestCommit ? `<b style="color:var(--gold)">${esc(latestCommit.slice(0, 7))}</b>` : '—'}</td><td>${st.latest_commit && st.latest_commit.message ? esc(String(st.latest_commit.message).split('\n')[0].slice(0, 40)) : '—'}</td></tr>`
+    : `<tr><th>最新 Release（release 通道）</th><td>${latestRelease ? `<b style="color:var(--gold)">${esc(latestRelease)}</b>` : '—'}</td><td>${st.latest_release && st.latest_release.published_at ? esc(String(st.latest_release.published_at).slice(0, 10)) : '—'}</td></tr>`
+  return `<div class="a-title">🔄 系统更新 <small>（跟踪通道：${isCommit ? '提交 commit' : '正式版 Release'} · 在配置中心「系统更新检测 → 跟踪通道」切换）</small></div>
   <div class="a-card"><h4>🔍 检测源与手动检测</h4>
     <div class="frow"><input id="repoUrl" value="${esc(cfg.update.repo_url || '')}" placeholder="https://github.com/your-org/dsh-store-server"><button class="abtn" style="flex:none" onclick="saveRepoUrl()">保存地址</button><button class="abtn pri" style="flex:none" onclick="checkUpdateNow()">🔍 一键检测</button></div>
-    <div class="msg">自动检测按配置中心「检测间隔」执行；「一键检测」立即请求 GitHub Releases 最新版本并与当前运行版本比对。</div>
+    <div class="msg">${isCommit ? '当前通道 = 提交：一键检测请求默认分支最新提交；一键更新拉取对应镜像（分支名 main / commit sha）。' : '当前通道 = Release：一键检测请求 GitHub 最新 Release；一键更新拉取对应版本镜像（v 前缀版本 tag）。'}自动检测按配置中心「检测间隔」执行。</div>
     <div class="msgbox" id="updCheck" style="display:none"></div></div>
   <div class="a-card"><h4>📦 客户端插件版本推送 <small>（推送后客户端检测到比自身新即弹横幅提示更新）</small></h4>
     <div class="frow"><input id="cpVer" value="${esc(cfg.client.plugin_version || '')}" placeholder="版本号，如 0.4.0（留空 = 不推送）" style="max-width:240px"></div>
@@ -347,12 +359,15 @@ RENDER.upd = async () => {
     版本号只填数字（如 0.4.0，不带 v）；留空表示不推送更新提醒。</div>
     <div class="msgbox" id="cpMsg" style="display:none"></div></div>
   <div class="a-card" style="border-color:rgba(245,166,35,.5)"><h4>⬆️ 更新状态</h4><table>
-    <tr><th>当前运行版本</th><td><b>${esc(st.current_version || st.from_version)}</b></td><td>—</td></tr>
+    <tr><th>当前运行版本</th><td><b>${esc(st.current_version || st.from_version)}</b></td><td>${isCommit ? '<span class="pill ok">commit 通道</span>' : '<span class="pill ok">release 通道</span>'}</td></tr>
     <tr><th>目标版本</th><td>${st.to_version ? `<b style="color:var(--gold)">${esc(st.to_version)}</b>` : '—'}</td><td>${st.stage === 'done' ? '<span class="pill ok">已完成</span>' : st.stage === 'failed' ? '<span class="pill ba">失败（已回滚）</span>' : '<span class="pill wa">' + esc(st.stage) + '</span>'}</td></tr>
-    <tr><th>最新 Release（GitHub 检测）</th><td>${latest ? `<b style="color:var(--gold)">${esc(latest)}</b>` : '—'}</td><td>${st.latest_release && st.latest_release.published_at ? esc(String(st.latest_release.published_at).slice(0, 10)) : '—'}</td></tr>
+    ${latestRow}
   </table>
-  <div class="frow" style="margin-top:10px"><input id="targetVer" value="${esc(latest)}" placeholder="目标版本，如 v0.4.1（^v\d+\.\d+\.\d+）" style="max-width:280px"><button class="abtn pri" style="flex:none" onclick="runUpdate()">⚡ 一键更新</button></div>
-  <div class="msg">一键更新执行预置脚本（git 拉取 → 构建 → 迁移 → 切换 → 自检 → 失败自动回滚）；单机更新本机，集群请逐台滚动。容器化部署请在宿主机执行 <b>GH_IMAGE=用户名/仓库名 ./scripts/deploy.sh</b>（拉取 GHCR 新镜像重启）。</div>
+  <div class="frow" style="margin-top:10px"><input id="targetVer" value="${esc(target)}" placeholder="${isCommit ? '分支名或 commit sha，如 main' : '目标版本，如 v0.1 或 v0.1.0'}" style="max-width:280px"><button class="abtn pri" style="flex:none" onclick="runUpdate()">⚡ 一键更新</button></div>
+  <div class="msg">一键更新分两种模式（自动识别）：<br>
+  · <b>容器部署（deploy-remote.sh / deploy-docker.sh）</b>：面板直接拉取对应镜像并自动重建本容器，自检失败自动回滚旧镜像，全程无需登录服务器；<br>
+  · <b>宿主机 git 部署</b>：git 拉取 → 构建 → 迁移 → 切换 → 自检 → 失败自动回滚。<br>
+  集群请逐台滚动；迁移由新容器启动时自动执行。热更新后「当前运行版本」会自动跟随所拉取的镜像 tag。</div>
   <div class="msgbox" id="updLog" style="display:none">${(st.log || []).map((l) => esc(l)).join('\n')}${st.error ? '\n' + esc(st.error) : ''}</div></div>`
 }
 
