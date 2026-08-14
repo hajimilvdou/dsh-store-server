@@ -1,0 +1,365 @@
+import type { Plugin, StarSnapshot } from '../shared/models.js'
+
+/** 同步管线写入目标（MemoryRepo / PgRepo 均需满足此结构）。 */
+export interface SyncTarget {
+  plugins: Plugin[]
+  starSnapshots: StarSnapshot[]
+  bumpPluginsRevision(): void
+  log(actor: string, action: string, detail: Record<string, unknown>): void
+}
+
+export interface SyncStatus {
+  enabled: boolean
+  tokens: number
+  last_run_at: string | null
+  last_result: string | null
+  last_changed: number
+  last_searched: number
+  last_error: string | null
+}
+
+interface GhRepo {
+  id: number
+  full_name: string
+  description: string | null
+  stargazers_count: number
+  html_url: string
+  license: { spdx_id?: string } | null
+  updated_at: string
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+export interface ReleaseInfo {
+  tag: string | null
+  name: string | null
+  published_at: string | null
+  body: string | null
+}
+
+/**
+ * GitHub 同步管线（v3 §4 五级管线：抓取 → 解析 → 归一化 → 质量评分 → 人工覆盖）。
+ * - 凭据（GITHUB_TOKENS，classic PAT）缺失时 enabled=false，runSync 直接跳过并记状态；
+ * - token 池轮换；Search API 搜索指定 topic；README 抓取 + 简介提取；
+ * - 星数每日快照 → 日增星数 → 趋势榜 Top N（新收录首日标记 new 不参与排行）。
+ */
+export class GithubSync {
+  enabled: boolean
+  readonly topic: string
+  readonly maxRepos: number
+  status: SyncStatus
+  private tokens: string[]
+  private tokenIndex = 0
+  private lastGhError: string | null = null
+
+  /** 星数区间拆分：单查询被 GitHub 1000 条硬上限截断时，逐段查询保证搜全。 */
+  private static readonly STAR_SLICES = [
+    'stars:>200',
+    'stars:101..200',
+    'stars:51..100',
+    'stars:21..50',
+    'stars:11..20',
+    'stars:6..10',
+    'stars:3..5',
+    'stars:1..2',
+    'stars:0',
+  ]
+
+  constructor(env: NodeJS.ProcessEnv = process.env) {
+    this.tokens = (env.GITHUB_TOKENS ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
+    this.enabled = this.tokens.length > 0
+    this.topic = env.SYNC_TOPIC?.trim() || 'dsh-plugin'
+    // 0 = 全量搜完（星数区间拆分补齐）；>0 = 只收录前 N 个
+    this.maxRepos = Math.max(0, Number(env.SYNC_MAX_REPOS ?? 0) || 0)
+    this.status = {
+      enabled: this.enabled,
+      tokens: this.tokens.length,
+      last_run_at: null,
+      last_result: this.enabled ? null : '未配置 GITHUB_TOKENS',
+      last_changed: 0,
+      last_searched: 0,
+      last_error: null,
+    }
+  }
+
+  /** 配置中心热更新 token 池（数组或逗号分隔串；自动去空去重；清空即停用同步）。 */
+  setTokens(raw: string[] | string): void {
+    const list = Array.isArray(raw) ? raw : String(raw).split(',')
+    this.tokens = [...new Set(list.map((t) => String(t).trim()).filter(Boolean))]
+    this.tokenIndex = 0
+    this.enabled = this.tokens.length > 0
+    this.status.enabled = this.enabled
+    this.status.tokens = this.tokens.length
+    if (!this.enabled) this.status.last_result = '未配置 GitHub 搜索 token（配置中心可填写）'
+  }
+
+  private gh(path: string, init?: RequestInit): Promise<Response | null> {
+    const token = this.tokens[this.tokenIndex % this.tokens.length]
+    this.tokenIndex++
+    return fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'dsh-store-server', ...(init?.headers ?? {}) },
+    })
+      .then((r) => {
+        if (r.ok) {
+          this.lastGhError = null
+          return r
+        }
+        this.lastGhError = `HTTP ${r.status}`
+        return null
+      })
+      .catch((e: unknown) => {
+        this.lastGhError = e instanceof Error ? e.message : String(e)
+        return null
+      })
+  }
+
+  /**
+   * 单条搜索查询（翻页取全）。返回是否被 GitHub 1000 条上限截断（还有更多没拿到）。
+   * 页间停顿 1.2s：搜索 API 限流 30 次/分钟（单 token）。
+   */
+  private async searchQuery(q: string, maxResults: number): Promise<{ items: GhRepo[]; truncated: boolean }> {
+    const out: GhRepo[] = []
+    const perPage = 100
+    let truncated = false
+    for (let page = 1; out.length < maxResults && page <= 10; page++) {
+      const res = await this.gh(`/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=${perPage}&page=${page}`)
+      if (!res) break
+      const data = (await res.json().catch(() => null)) as { items?: GhRepo[] } | null
+      const items = data?.items ?? []
+      out.push(...items)
+      if (items.length < perPage) break
+      if (page === 10) truncated = true
+      await sleep(1200)
+    }
+    return { items: out.slice(0, maxResults), truncated }
+  }
+
+  /**
+   * 搜索规则（主搜 + 兜底 + 合并去重 + 星数区间补齐，搜完为止）：
+   * - 主搜 topic 标签（最准、最多）；
+   * - 兜底关键词（防止有人没打标签）；
+   * - 按 full_name 去重；
+   * - 若单查询被 GitHub 1000 条硬上限截断 → 按星数区间逐段查询补齐。
+   */
+  async searchRepos(): Promise<GhRepo[]> {
+    if (!this.enabled) return []
+    const seen = new Set<string>()
+    const merged: GhRepo[] = []
+    const push = (list: GhRepo[]): void => {
+      for (const r of list) {
+        if (!seen.has(r.full_name)) {
+          seen.add(r.full_name)
+          merged.push(r)
+        }
+      }
+    }
+
+    if (this.maxRepos > 0) {
+      // 限量模式：只收录前 N 个
+      push((await this.searchQuery(`topic:${this.topic}`, this.maxRepos)).items)
+      push((await this.searchQuery(`${this.topic} in:name,description`, this.maxRepos)).items)
+      return merged.slice(0, this.maxRepos)
+    }
+
+    // 全量模式：搜完为止
+    const topicFirst = await this.searchQuery(`topic:${this.topic}`, 1000)
+    push(topicFirst.items)
+    if (topicFirst.truncated) {
+      for (const slice of GithubSync.STAR_SLICES) {
+        push((await this.searchQuery(`topic:${this.topic} ${slice}`, 1000)).items)
+      }
+    }
+    const kwFirst = await this.searchQuery(`${this.topic} in:name,description`, 1000)
+    push(kwFirst.items)
+    if (kwFirst.truncated) {
+      for (const slice of GithubSync.STAR_SLICES) {
+        push((await this.searchQuery(`${this.topic} in:name,description ${slice}`, 1000)).items)
+      }
+    }
+    return merged
+  }
+
+  /** README 抓取 + 简介提取（第一条有效段落，截断 140 字）。 */
+  async extractDescription(fullName: string, fallback: string | null): Promise<string> {
+    const res = await fetch(
+      `https://raw.githubusercontent.com/${fullName}/HEAD/README.md`,
+      { headers: { 'User-Agent': 'dsh-store-server' } },
+    ).catch(() => null)
+    if (!res || !res.ok) return fallback ?? '（README 无有效段落）'
+    const text = (await res.text()).slice(0, 32 * 1024)
+    const cleaned = text
+      .replace(/<!--.*?-->/gs, '')
+      .replace(/!\[.*?\]\(.*?\)/g, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/[|>_*~`]/g, '')
+    const lines = cleaned
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 12 && !l.startsWith('!') && !/^(npm|yarn|pnpm|git|curl|docker|License|MIT|Apache|Build|Coverage|Tests?|Downloads?)/i.test(l))
+    const picked = lines[0] ?? fallback ?? '（README 无有效段落）'
+    return picked.length > 140 ? picked.slice(0, 140) + '…' : picked
+  }
+
+  /** 质量评分（0~100，启发式）。 */
+  qualityScore(repo: GhRepo, description: string): number {
+    let score = 40
+    if (description && description.length > 20) score += 20
+    if (repo.description) score += 10
+    if (repo.license?.spdx_id) score += 15
+    if (repo.stargazers_count > 0) score += Math.min(15, Math.round(repo.stargazers_count / 200))
+    return Math.min(100, score)
+  }
+
+  /** 单条提取管线：仓库 → 插件条目（提速收录复用）。 */
+  async extractPlugin(fullName: string): Promise<Plugin | null> {
+    const res = await this.gh(`/repos/${fullName}`)
+    if (!res) return null
+    const repo = (await res.json().catch(() => null)) as GhRepo | null
+    if (!repo) return null
+    const repoShort = fullName.split('/')[1]
+    // 安装地址（DSH 插件规范）：仓库 package.json 的 name 即 npm 包名；
+    // 未发布到 npm 时用 git spec（dsh plugin add github:owner/repo）。
+    const pkg = await this.fetchPackageJson(fullName)
+    const npm = await this.lookupNpm(pkg?.name ?? null)
+    const id = pkg?.name ?? repoShort
+    const install = npm ? id : `github:${fullName}`
+    const version = npm?.latest ?? pkg?.version ?? '1.0.0'
+    const description = await this.extractDescription(fullName, repo.description)
+    return {
+      id,
+      version,
+      name: id,
+      description,
+      repo: fullName,
+      repo_url: repo.html_url,
+      author: fullName.split('/')[0],
+      source: 'community',
+      stars: repo.stargazers_count,
+      stars_delta_day: 0,
+      trending_rank: null,
+      likes: 0,
+      downloads_7d: 0,
+      quality_score: this.qualityScore(repo, description),
+      tags: [],
+      compat: 'dsh ≥0.1.0-rc.5',
+      install,
+      is_new: true,
+      security: { level: 0, score: 100, risk_tags: [], blocked: false },
+      status: this.qualityScore(repo, description) < 60 ? 'needs_review' : 'listed',
+      updated_at: repo.updated_at,
+    }
+  }
+
+  /** 仓库根 package.json（name/version = 安装地址）。 */
+  private async fetchPackageJson(fullName: string): Promise<{ name?: string; version?: string } | null> {
+    try {
+      const res = await fetch(`https://raw.githubusercontent.com/${fullName}/HEAD/package.json`, {
+        headers: { 'User-Agent': 'dsh-store-server' },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as { name?: string; version?: string }
+    } catch {
+      return null
+    }
+  }
+
+  /** npm 注册表查询：已发布则取 latest 版本（安装地址校验）。 */
+  private async lookupNpm(name: string | null): Promise<{ latest: string } | null> {
+    if (!name) return null
+    try {
+      const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, {
+        headers: { 'User-Agent': 'dsh-store-server' },
+      })
+      if (!res.ok) return null
+      const data = (await res.json()) as { version?: string }
+      return data?.version ? { latest: data.version } : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 全量同步：搜索 → 提取 → upsert → 星数快照 → 趋势榜重算。 */
+  async runSync(target: SyncTarget): Promise<{ changed: number }> {
+    if (!this.enabled) {
+      this.status.last_result = '未配置 GITHUB_TOKENS'
+      return { changed: 0 }
+    }
+    const repos = await this.searchRepos()
+    if (this.lastGhError) {
+      const message = this.lastGhError.includes('401')
+        ? 'GitHub 认证失败：token 无效或已撤销（请重新生成 classic PAT）'
+        : `GitHub 访问失败：${this.lastGhError}`
+      this.status = { ...this.status, last_run_at: new Date().toISOString(), last_result: message, last_searched: 0, last_error: this.lastGhError }
+      target.log('sync', 'github.sync.error', { error: this.lastGhError })
+      return { changed: 0 }
+    }
+    const today = new Date().toISOString().slice(0, 10)
+    const prevByRepo = new Map<string, number>()
+    for (const s of target.starSnapshots) {
+      if (s.date < today) prevByRepo.set(s.repo, Math.max(prevByRepo.get(s.repo) ?? 0, s.stars))
+    }
+    let changed = 0
+
+    for (const repo of repos) {
+      const existing = target.plugins.find((p) => p.repo === repo.full_name)
+      const plugin = existing ?? (await this.extractPlugin(repo.full_name))
+      if (!plugin) continue
+      if (!existing) {
+        target.plugins.push(plugin)
+        changed++
+      } else {
+        existing.stars = repo.stargazers_count
+        existing.repo_url = repo.html_url
+        existing.updated_at = repo.updated_at
+      }
+      // 星数快照（每日至少一个点）
+      const hasToday = target.starSnapshots.some((s) => s.repo === repo.full_name && s.date === today)
+      if (!hasToday) target.starSnapshots.push({ repo: repo.full_name, date: today, stars: repo.stargazers_count })
+    }
+
+    // 趋势榜重算：日增 = 今日 − 前一快照；新收录首日不参与排行
+    const todayStars = new Map(target.starSnapshots.filter((s) => s.date === today).map((s) => [s.repo, s.stars]))
+    for (const p of target.plugins) {
+      const todayS = todayStars.get(p.repo)
+      const prevS = prevByRepo.get(p.repo)
+      if (todayS !== undefined && prevS !== undefined) {
+        p.stars_delta_day = todayS - prevS
+        p.is_new = false
+      } else if (!prevByRepo.has(p.repo)) {
+        p.is_new = true
+        p.stars_delta_day = 0
+      }
+    }
+    const ranked = target.plugins
+      .filter((p) => !p.is_new)
+      .sort((a, b) => b.stars_delta_day - a.stars_delta_day)
+      .slice(0, 20)
+    target.plugins.forEach((p) => (p.trending_rank = null))
+    ranked.forEach((p, i) => (p.trending_rank = i + 1))
+
+    if (changed > 0) target.bumpPluginsRevision()
+    this.status = { ...this.status, last_run_at: new Date().toISOString(), last_result: `成功 · 搜索 ${repos.length} 仓库 · ${changed} 变更`, last_changed: changed, last_searched: repos.length, last_error: null }
+    target.log('sync', 'github.sync', { searched: repos.length, changed })
+    return { changed }
+  }
+
+  /** 检测本项目最新 Release（v3.7 V1：只提醒不自动更，升级动作由管理员触发）。 */
+  async checkLatestRelease(repoUrl: string): Promise<ReleaseInfo | null> {
+    const m = (repoUrl || '').match(/github\.com\/([^/]+)\/([^/]+)/)
+    if (!m) return null
+    const res = await this.gh(`/repos/${m[1]}/${m[2]}/releases/latest`)
+    if (!res) return null
+    const data = (await res.json().catch(() => null)) as { tag_name?: string; name?: string | null; published_at?: string; body?: string | null } | null
+    if (!data) return null
+    return { tag: data.tag_name ?? null, name: data.name ?? null, published_at: data.published_at ?? null, body: data.body ?? null }
+  }
+}

@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DSH 插件商城 · 管理端</title>
+<style>
+:root{--brand1:#6a5cff;--brand2:#00c2a8;--gold:#f5a623;--up:#2ea043;--danger:#ff6b6b;
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2330;--line:#2b3340;--tx:#e6edf3;--tx2:#8b98a5;--hover:#1f2630}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--tx);min-height:100vh}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font-family:inherit;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--tx);font-size:12.5px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--brand2)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--tx2);font-weight:500;padding:7px 9px;border-bottom:1px solid var(--line);font-size:11.5px}
+td{padding:8px 9px;border-bottom:1px solid var(--line);color:var(--tx)}
+tr:hover td{background:var(--hover)}
+.pill{font-size:10.5px;padding:2px 8px;border-radius:8px}
+.pill.ok{background:rgba(46,160,67,.14);color:var(--up)}
+.pill.wa{background:rgba(245,166,35,.14);color:var(--gold)}
+.pill.ba{background:rgba(255,107,107,.14);color:var(--danger)}
+.abtn{font-size:11.5px;padding:4px 11px;border:1px solid var(--line);border-radius:7px;color:var(--tx)}
+.abtn:hover{border-color:var(--brand2);color:var(--brand2)}
+.abtn.pri{background:linear-gradient(135deg,var(--brand1),var(--brand2));color:#fff;border:none}
+.abtn.dan{color:var(--danger)}
+/* 登录页 */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:50}
+.login-card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:28px;width:360px}
+.login-card h2{font-size:16px;margin-bottom:6px}
+.login-card p{font-size:12px;color:var(--tx2);margin-bottom:14px}
+.login-card .row{display:flex;gap:8px;margin-top:12px}
+.login-card input{flex:1}
+/* 布局 */
+#app{display:flex;height:100vh}
+.a-nav{width:196px;background:var(--bg2);border-right:1px solid var(--line);padding:14px 10px;flex:none;overflow-y:auto}
+.a-nav .nl{font-size:13px;font-weight:700;padding:4px 10px 12px;color:var(--tx)}
+.a-nav button{display:flex;width:100%;text-align:left;padding:9px 12px;border-radius:8px;font-size:13px;color:var(--tx2);margin-bottom:2px;gap:8px}
+.a-nav button.on{background:linear-gradient(135deg,rgba(106,92,255,.18),rgba(0,194,168,.14));color:var(--tx);font-weight:600}
+.a-nav .logout{margin-top:10px;border:1px solid var(--line);color:var(--danger);justify-content:center}
+.a-main{flex:1;overflow-y:auto;padding:18px 22px}
+.a-title{font-size:17px;font-weight:700;margin-bottom:14px}
+.a-title small{font-size:12px;color:var(--tx2);font-weight:400}
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.stat{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:14px}
+.stat .v{font-size:23px;font-weight:800;color:var(--tx);word-break:break-all}
+.stat .k{font-size:12px;color:var(--tx2);margin-top:3px}
+.stat .s{font-size:11px;margin-top:5px;color:var(--up)}
+.a-card{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:15px;margin-bottom:14px}
+.a-card h4{font-size:13.5px;margin-bottom:10px;color:var(--tx)}
+.frow{display:flex;gap:10px;margin-bottom:10px}
+.frow input,.frow select,.frow textarea{flex:1}
+.cfg{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px}
+.cfg .ci{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;background:var(--bg3);border:1px solid var(--line);border-radius:9px;font-size:12.5px}
+.cfg .ci input{width:84px;text-align:right}
+.cfg .ci .lab{color:var(--tx2);font-size:12px}
+.cfg .ci.wide{grid-column:1/-1;align-items:flex-start;flex-direction:column;gap:6px}
+.cfg .ci.wide .lab{width:100%}
+.cfg .ci input.wide{width:100%;text-align:left}
+.cfg .ci textarea{width:100%;min-height:64px;text-align:left}
+.cfg .ci .ck{display:flex;align-items:center;gap:6px;color:var(--tx);font-size:12px}
+.cfg .ci .ck input{width:auto}
+.cfg .ci .sv{flex:none;font-size:11px;padding:4px 10px;border:1px solid var(--line);border-radius:7px;color:var(--tx2);white-space:nowrap}
+.cfg .ci .sv:hover{border-color:var(--brand2);color:var(--brand2)}
+.cfg .ci .sv.ok{color:var(--up);border-color:var(--up)}
+.update-banner{display:flex;align-items:center;gap:10px;padding:9px 14px;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.5);border-radius:10px;margin-bottom:12px;color:var(--tx);font-size:12.5px}
+.update-banner b{color:var(--gold)}
+.secbadge{font-size:10px;padding:1.5px 7px;border-radius:8px;white-space:nowrap}
+.secbadge.ok{background:rgba(46,160,67,.14);color:var(--up)}
+.secbadge.wa{background:rgba(245,166,35,.14);color:var(--gold)}
+.secbadge.ba{background:rgba(255,107,107,.14);color:var(--danger)}
+.msg{margin-top:10px;font-size:12px;color:var(--tx2);line-height:1.6}
+.msgbox{padding:9px 11px;border:1px solid var(--line);border-left:3px solid var(--brand2);border-radius:8px;background:var(--bg3);font-size:12px;margin-top:10px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="login-card">
+    <h2>🛠 插件商城 · 管理端</h2>
+    <p>输入管理员凭证。生产环境：口令 = 环境变量 <b style="color:var(--brand2)">ADMIN_TOKEN</b> 或配置中心保存的管理密码；纯离线演示模式默认 <b style="color:var(--brand2)">mock-admin</b>。</p>
+    <input id="token" placeholder="管理员凭证（X-Admin-Token）" autocomplete="off">
+    <div class="row"><button class="abtn pri" style="flex:1" onclick="login()">进入管理端</button></div>
+    <div id="loginErr" class="msg" style="color:var(--danger);display:none"></div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <nav class="a-nav">
+    <div class="nl">🛠 插件商城 · 管理端</div>
+    <button class="on" data-page="dash" onclick="page('dash')">📊 仪表盘</button>
+    <button data-page="sec" onclick="page('sec')">🛡 安全监控</button>
+    <button data-page="fed" onclick="page('fed')">🌐 联邦互联</button>
+    <button data-page="upd" onclick="page('upd')">🔄 系统更新</button>
+    <button data-page="plugins" onclick="page('plugins')">📦 插件库</button>
+    <button data-page="combos" onclick="page('combos')">🗂 组合审核</button>
+    <button data-page="users" onclick="page('users')">👥 用户管理</button>
+    <button data-page="reports" onclick="page('reports')">📥 上报队列</button>
+    <button data-page="anno" onclick="page('anno')">📢 公告管理</button>
+    <button data-page="cfg" onclick="page('cfg')">⚙️ 配置中心</button>
+    <button class="logout" onclick="logout()">退出</button>
+  </nav>
+  <main class="a-main" id="main">
+    <div id="updateBanner" class="update-banner" style="display:none"></div>
+    <div id="mainContent">加载中…</div>
+  </main>
+</div>
+
+<script>
+const TOKEN_KEY = 'dshs_admin_token'
+let adminToken = localStorage.getItem(TOKEN_KEY) || ''
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'X-Admin-Token': adminToken, ...(opts.headers || {}) },
+  })
+  if (res.status === 401) { showLogin(); throw new Error('unauthorized') }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.message || res.statusText)
+  }
+  return res.json()
+}
+const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+const put = (path, body) => api(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
+const del = (path) => api(path, { method: 'DELETE' })
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+function showLogin() {
+  document.getElementById('login').style.display = 'flex'
+  document.getElementById('app').style.display = 'none'
+}
+function login() {
+  adminToken = document.getElementById('token').value.trim()
+  localStorage.setItem(TOKEN_KEY, adminToken)
+  api('/admin/stats').then(() => {
+    document.getElementById('login').style.display = 'none'
+    document.getElementById('app').style.display = 'flex'
+    page(currentPage)
+  }).catch((e) => {
+    const err = document.getElementById('loginErr')
+    err.textContent = '凭证无效：' + e.message
+    err.style.display = 'block'
+  })
+}
+function logout() {
+  localStorage.removeItem(TOKEN_KEY)
+  adminToken = ''
+  showLogin()
+}
+
+let currentPage = 'dash'
+function page(p) {
+  currentPage = p
+  document.querySelectorAll('.a-nav button[data-page]').forEach((b) => b.classList.toggle('on', b.dataset.page === p))
+  const main = document.getElementById('mainContent')
+  main.innerHTML = '加载中…'
+  const render = RENDER[p] || (() => '<div class="a-card">页面建设中</div>')
+  Promise.resolve(render()).then((html) => { main.innerHTML = html }).catch((e) => {
+    main.innerHTML = `<div class="a-card"><h4>加载失败</h4><div class="msg" style="color:var(--danger)">${esc(e.message)}</div></div>`
+  })
+  checkUpdateBanner()
+}
+
+/* 服务端版本横幅：GitHub 检测到新 Release 且与当前运行版本不同 → 顶部横幅 + 一键跳转更新页 */
+function checkUpdateBanner() {
+  const el = document.getElementById('updateBanner')
+  if (!el || !adminToken) return
+  api('/admin/update/status').then((st) => {
+    const tag = st.latest_release && st.latest_release.tag
+    if (tag && st.current_version && tag !== st.current_version) {
+      el.style.display = 'flex'
+      el.innerHTML = `🆕 服务端有新版本 <b>${esc(tag)}</b>（当前运行 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
+    } else {
+      el.style.display = 'none'
+    }
+  }).catch(() => {})
+}
+
+/* ============ 页面渲染 ============ */
+const RENDER = {}
+
+RENDER.dash = async () => {
+  const [stats, sync, combos, reports, plugins] = await Promise.all([
+    api('/admin/stats'), api('/admin/sync'), api('/admin/combos'), api('/admin/reports'), api('/admin/plugins'),
+  ])
+  const pendingCombos = combos.filter((c) => c.status === 'pending').length
+  const pendingReports = reports.filter((r) => r.status === 'pending').length
+  const needsReview = plugins.filter((p) => p.status === 'needs_review').length
+  return `<div class="a-title">📊 仪表盘</div>
+  <div class="stat-row">
+    <div class="stat"><div class="v">${stats.plugins_total}</div><div class="k">收录插件</div><div class="s">↑ 今日收录同步中</div></div>
+    <div class="stat"><div class="v">${stats.users_registered}</div><div class="k">注册用户（GitHub）</div><div class="s">↑ 今日 +${stats.today_new_users}</div></div>
+    <div class="stat"><div class="v">${stats.combos_published}</div><div class="k">组合已发布</div><div class="s">待审 ${pendingCombos}</div></div>
+    <div class="stat"><div class="v" style="font-size:16px">${esc(stats.today_star_champion || '—')}</div><div class="k">今日星增冠军</div><div class="s">趋势榜已更新</div></div>
+  </div>
+  <div class="a-card"><h4>同步状态</h4><table>
+    <tr><th>任务</th><th>状态</th><th>结果</th></tr>
+    <tr><td>GitHub 增量同步（topic:dsh-plugin）</td><td>${sync.enabled ? '<span class="pill ok">已启用（token ×' + sync.tokens + '）</span>' : '<span class="pill wa">未配置 GITHUB_TOKENS</span>'}</td><td>${esc(sync.last_result || '—')}</td></tr>
+    <tr><td>⭐ 星数快照 / 趋势榜重算</td><td><span class="pill ok">随同步任务</span></td><td>${esc(sync.last_run_at || '—')}</td></tr>
+  </table>
+  <div class="msgbox" id="syncMsg" style="display:none"></div></div>
+  <div class="a-card"><h4>待办</h4><table>
+    <tr><th>类型</th><th>数量</th><th>入口</th></tr>
+    <tr><td>提取质量待人工完善（needs_review）</td><td>${needsReview}</td><td><button class="abtn" onclick="page('plugins')">去处理</button></td></tr>
+    <tr><td>组合待审核</td><td>${pendingCombos}</td><td><button class="abtn" onclick="page('combos')">去审核</button></td></tr>
+    <tr><td>库外插件上报待处理</td><td>${pendingReports}</td><td><button class="abtn" onclick="page('reports')">去收录</button></td></tr>
+  </table></div>`
+}
+
+RENDER.sec = async () => {
+  const [health, plugins, reports, users, risk] = await Promise.all([api('/admin/health'), api('/admin/plugins'), api('/admin/reports'), api('/admin/users'), api('/admin/risk-queue')])
+  const blocked = plugins.filter((p) => p.security.blocked || p.status === 'blocked').length
+  const pendingReports = reports.filter((r) => r.status === 'pending').length
+  const pendingRisk = risk.filter((r) => r.status === 'pending').length
+  const riskRows = risk.length
+    ? risk.map((r) => `<tr>
+    <td><b>${esc(r.login)}</b></td>
+    <td>${esc(r.target)}</td>
+    <td style="font-size:11.5px">${esc(r.reason)}</td>
+    <td style="font-size:11.5px">${esc(r.ip)}</td>
+    <td style="font-size:11.5px">${esc((r.at || '').slice(0, 16).replace('T', ' '))}</td>
+    <td>${r.status === 'pending'
+      ? `<button class="abtn pri" onclick="riskAction(${r.id},'include')">✓ 计入</button> <button class="abtn dan" onclick="riskAction(${r.id},'reject')">✕ 清除</button>`
+      : r.status === 'included' ? '<span class="pill ok">已计入</span>' : '<span class="pill ba">已清除</span>'}</td>
+  </tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--tx2)">风控队列为空</td></tr>'
+  const today = new Date().toISOString().slice(0, 10)
+  const todayNew = users.filter((u) => (u.registered_at || '').slice(0, 10) === today).length
+  const apiErr = health.api_error_rate == null ? '—' : health.api_error_rate + '%'
+  const diskText = health.disk.used_gb == null ? '—' : `${health.disk.used_gb} GB / ${health.disk.total_gb} GB（${health.disk.pct}%）`
+  const diskPill = health.disk.pct == null ? '<span class="pill ok">正常</span>' : health.disk.pct >= 90 ? '<span class="pill ba">告急</span>' : health.disk.pct >= 80 ? '<span class="pill wa">偏高</span>' : '<span class="pill ok">充足</span>'
+  return `<div class="a-title">🛡 安全监控 <small>（阈值与告警 webhook 在配置中心可调）</small></div>
+  <div class="stat-row">
+    <div class="stat"><div class="v">${users.length}</div><div class="k">注册用户（GitHub）</div><div class="s">↑ 今日 +${todayNew}</div></div>
+    <div class="stat"><div class="v">${plugins.length} / ${plugins.filter((p) => p.trending_rank).length}</div><div class="k">插件在架 / 趋势榜</div><div class="s">待完善 ${plugins.filter((p) => p.status === 'needs_review').length}</div></div>
+    <div class="stat"><div class="v" style="color:var(--danger)">${blocked} / ${pendingReports}</div><div class="k">问题插件：系统拉黑 / 用户举报</div><div class="s" style="color:var(--danger)">风控待复核 ${pendingRisk} · 举报待处置 ${pendingReports}</div></div>
+    <div class="stat"><div class="v">${esc(health.github_sync.at || '—')}</div><div class="k">上次 GitHub 同步</div><div class="s">${health.github_sync.ok ? '正常' : '异常'}</div></div>
+  </div>
+  <div class="a-card"><h4>服务健康</h4><table>
+    <tr><th>指标</th><th>当前</th><th>状态</th></tr>
+    <tr><td>API 错误率（进程累计）</td><td>${apiErr}（${health.api_errors ?? 0} / ${health.api_requests ?? 0} 次请求）</td><td>${health.api_error_rate == null || health.api_error_rate < 1 ? '<span class="pill ok">正常</span>' : '<span class="pill wa">偏高</span>'}</td></tr>
+    <tr><td>GitHub 搜索 Token 池</td><td>共 ${health.token_pool.total} 枚（未配置则同步与登录休眠）</td><td>${health.token_pool.total > 0 ? '<span class="pill ok">已配置</span>' : '<span class="pill wa">未配置</span>'}</td></tr>
+    <tr><td>磁盘余量（数据卷）</td><td>${diskText}</td><td>${diskPill}</td></tr>
+    <tr><td>时钟漂移（宿主机 NTP 自检）</td><td>+${health.clock_drift_ms}ms（容忍 ±60s）</td><td>${Math.abs(health.clock_drift_ms) > 500 ? '<span class="pill wa">超 500ms 告警线</span>' : '<span class="pill ok">正常</span>'}</td></tr>
+    <tr><td>限流触发（进程累计）</td><td>${health.rate_limited ?? 0} 次</td><td><span class="pill ok">已自动 429</span></td></tr>
+    <tr><td>认证失败（进程累计）</td><td>${health.auth_failures ?? 0} 次</td><td><span class="pill ok">已拒绝</span></td></tr>
+  </table></div>
+  <div class="a-card"><h4>🚨 安全事件（近 24h）</h4><table>
+    <tr><th>类型</th><th>次数</th><th>处置</th></tr>
+    <tr><td>写接口限流触发</td><td>${health.rate_limited ?? 0}</td><td><span class="pill wa">已自动降速（429）</span></td></tr>
+    <tr><td>认证失败 / 爆破尝试</td><td>${health.auth_failures ?? 0}</td><td><span class="pill ok">已拒绝</span></td></tr>
+    <tr><td>无匿名凭证的伪造写请求（下载计数）</td><td>${health.blocked_requests ?? 0}</td><td><span class="pill ok">全部拒绝</span></td></tr>
+    <tr><td>疑似刷赞（同 IP 多账号集中点赞等）</td><td>${pendingRisk} 待复核</td><td><span class="pill wa">已隔离为"待确认"，不计入排行</span></td></tr>
+  </table></div>
+  <div class="a-card"><h4>🧾 风控队列 <small>（待确认点赞不计入排行；计入 = 生效，清除 = 作废）</small></h4>
+  <div class="msgbox" id="riskMsg" style="display:none"></div>
+  <table>
+    <tr><th>账号</th><th>目标</th><th>原因</th><th>IP</th><th>时间</th><th>复核</th></tr>
+    ${riskRows}
+  </table></div>`
+}
+
+RENDER.fed = async () => {
+  const fed = await api('/admin/federation')
+  const rows = fed.relations.map((r) => `<tr>
+    <td><b>${esc(r.peer_url)}</b></td>
+    <td>${r.status === 'connected' ? '<span class="pill ok">已连接</span>' : r.status === 'pending' ? '<span class="pill wa">待接受</span>' : r.status === 'rejected' ? '<span class="pill ba">已拒绝</span>' : '<span class="pill wa">已断联</span>'}</td>
+    <td style="font-size:11.5px">${esc(Object.entries(r.share).map(([k, v]) => k + ':' + v).join(' · ') || '—')}</td>
+    <td>${r.mode === 'realtime' ? '<span class="pill ok">实时共享</span>' : '<span class="pill wa">快照</span>'}</td>
+    <td>${r.rtt_ms != null ? `<span style="color:var(--up)">${r.rtt_ms}ms</span>` : '—'}</td>
+    <td>${r.status === 'pending' ? `<button class="abtn pri" onclick="fedAction('${r.id}','accept')">接受</button> <button class="abtn dan" onclick="fedAction('${r.id}','reject')">拒绝</button>` : `<button class="abtn" onclick="fedAction('${r.id}','disconnect')">断开</button>`}</td>
+  </tr>`).join('')
+  return `<div class="a-title">🌐 联邦互联 <small>（发起方主动邀请，接收方审核接受）</small></div>
+  <div class="a-card"><h4>＋ 发起联邦邀请</h4>
+    <div class="frow"><input id="fedUrl" placeholder="对方服务器地址，如 https://store-friend.com"><input id="fedSecret" placeholder="对方联邦密码" style="max-width:220px"><button class="abtn pri" style="flex:none" onclick="fedHandshake()">发送邀请</button></div>
+    <div class="msg">联邦密码 ≠ 用户访问密码，两者独立。密码错误时邀请无法生成有效签名，对方无感知（防探测）。</div>
+    <div class="msgbox" id="fedMsg" style="display:none"></div></div>
+  <div class="a-card"><h4>联邦关系</h4><table>
+    <tr><th>对方服务器</th><th>状态</th><th>共享内容</th><th>模式</th><th>RTT</th><th>操作</th></tr>
+    ${rows || '<tr><td colspan="6" style="color:var(--tx2)">暂无联邦关系</td></tr>'}
+  </table></div>`
+}
+
+RENDER.upd = async () => {
+  const [st, cfg] = await Promise.all([api('/admin/update/status'), api('/admin/config')])
+  const latest = st.latest_release && st.latest_release.tag ? st.latest_release.tag : ''
+  return `<div class="a-title">🔄 系统更新 <small>（服务端版本监控 · 手动一键检测 · 检测到新 Release 顶部横幅提醒 · 一键在线更新 · 失败自动回滚）</small></div>
+  <div class="a-card"><h4>🔍 检测源与手动检测</h4>
+    <div class="frow"><input id="repoUrl" value="${esc(cfg.update.repo_url || '')}" placeholder="https://github.com/your-org/dsh-store-server"><button class="abtn" style="flex:none" onclick="saveRepoUrl()">保存地址</button><button class="abtn pri" style="flex:none" onclick="checkUpdateNow()">🔍 一键检测</button></div>
+    <div class="msg">自动检测按配置中心「检测间隔」执行；「一键检测」立即请求 GitHub Releases 最新版本并与当前运行版本比对。</div>
+    <div class="msgbox" id="updCheck" style="display:none"></div></div>
+  <div class="a-card"><h4>📦 客户端插件版本推送 <small>（推送后客户端检测到比自身新即弹横幅提示更新）</small></h4>
+    <div class="frow"><input id="cpVer" value="${esc(cfg.client.plugin_version || '')}" placeholder="版本号，如 0.4.0（留空 = 不推送）" style="max-width:240px"></div>
+    <div class="frow"><input id="cpSpec" value="${esc(cfg.client.install_spec || '')}" placeholder="安装地址（spec），如 github:yourname/dsh-store" style="max-width:560px"><button class="abtn pri" style="flex:none" onclick="saveClientPush()">保存推送</button></div>
+    <div class="msg">安装地址支持三种写法（客户端更新命令 = <b>dsh plugin add &lt;安装地址&gt;@&lt;版本&gt;</b>）：<br>
+    ① GitHub 仓库（推荐）：<b>github:owner/repo</b>，例如 <b>github:yourname/dsh-store</b> → 客户端执行 dsh plugin add github:yourname/dsh-store@0.4.0<br>
+    ② npm 包名：<b>npm:包名</b>，例如 npm:dsh-store（已发布到 npm registry 时）<br>
+    ③ 直链安装包：<b>https://example.com/dsh-store-0.4.0.tgz</b>（可访问的 tar 包直链）<br>
+    版本号只填数字（如 0.4.0，不带 v）；留空表示不推送更新提醒。</div>
+    <div class="msgbox" id="cpMsg" style="display:none"></div></div>
+  <div class="a-card" style="border-color:rgba(245,166,35,.5)"><h4>⬆️ 更新状态</h4><table>
+    <tr><th>当前运行版本</th><td><b>${esc(st.current_version || st.from_version)}</b></td><td>—</td></tr>
+    <tr><th>目标版本</th><td>${st.to_version ? `<b style="color:var(--gold)">${esc(st.to_version)}</b>` : '—'}</td><td>${st.stage === 'done' ? '<span class="pill ok">已完成</span>' : st.stage === 'failed' ? '<span class="pill ba">失败（已回滚）</span>' : '<span class="pill wa">' + esc(st.stage) + '</span>'}</td></tr>
+    <tr><th>最新 Release（GitHub 检测）</th><td>${latest ? `<b style="color:var(--gold)">${esc(latest)}</b>` : '—'}</td><td>${st.latest_release && st.latest_release.published_at ? esc(String(st.latest_release.published_at).slice(0, 10)) : '—'}</td></tr>
+  </table>
+  <div class="frow" style="margin-top:10px"><input id="targetVer" value="${esc(latest)}" placeholder="目标版本，如 v0.4.1（^v\d+\.\d+\.\d+）" style="max-width:280px"><button class="abtn pri" style="flex:none" onclick="runUpdate()">⚡ 一键更新</button></div>
+  <div class="msg">一键更新执行预置脚本（git 拉取 → 构建 → 迁移 → 切换 → 自检 → 失败自动回滚）；单机更新本机，集群请逐台滚动。容器化部署请在宿主机执行 <b>GH_IMAGE=用户名/仓库名 ./scripts/deploy.sh</b>（拉取 GHCR 新镜像重启）。</div>
+  <div class="msgbox" id="updLog" style="display:none">${(st.log || []).map((l) => esc(l)).join('\n')}${st.error ? '\n' + esc(st.error) : ''}</div></div>`
+}
+
+let pluginQuery = ''
+let pluginPage = 1
+const PLUGIN_PAGE_SIZE = 20
+
+RENDER.plugins = async () => {
+  const [plugins] = await Promise.all([api('/admin/plugins'), api('/admin/blocklist')])
+  const q = pluginQuery.trim().toLowerCase()
+  const filtered = plugins.filter((p) =>
+    !q ||
+    String(p.id).toLowerCase().includes(q) ||
+    String(p.author || '').toLowerCase().includes(q) ||
+    String(p.repo || '').toLowerCase().includes(q) ||
+    String(p.description || '').toLowerCase().includes(q) ||
+    String(p.install || '').toLowerCase().includes(q),
+  )
+  const total = filtered.length
+  const pages = Math.max(1, Math.ceil(total / PLUGIN_PAGE_SIZE))
+  if (pluginPage > pages) pluginPage = pages
+  const pageItems = filtered.slice((pluginPage - 1) * PLUGIN_PAGE_SIZE, pluginPage * PLUGIN_PAGE_SIZE)
+  const rows = pageItems.map((p) => `<tr>
+    <td><b>${esc(p.id)}</b>${p.install ? `<br><span style="font-size:11px;color:var(--tx2)">dsh plugin add ${esc(p.install)}</span>` : ''}</td>
+    <td>${esc(p.author || '—')}</td>
+    <td>${p.source === 'official' ? '<span class="pill ok">官方</span>' : '<span class="pill wa">社区</span>'}</td>
+    <td>${p.stars}</td><td style="color:var(--up)">+${p.stars_delta_day}</td><td>${p.quality_score}</td>
+    <td>${p.security.blocked ? '<span class="secbadge ba">已拉黑</span>' : p.security.risk_tags.length ? `<span class="secbadge wa">${p.security.risk_tags.length} 风险</span>` : `<span class="secbadge ok">L${p.security.level}</span>`}</td>
+    <td>${p.status === 'blocked' ? '<span class="pill ba">已拉黑</span>' : p.status === 'needs_review' ? '<span class="pill wa">待完善</span>' : '<span class="pill ok">已收录</span>'}</td>
+    <td><a href="${esc(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--brand1);text-decoration:none;font-size:11.5px">源地址 ↗</a> ${p.security.blocked ? `<button class="abtn" onclick="unblock('${p.id}')">解除拉黑</button>` : `<button class="abtn dan" onclick="block('${p.id}')">拉黑</button>`}</td>
+  </tr>`).join('')
+  const pageBtns = Array.from({ length: pages }, (_, i) => {
+    const n = i + 1
+    return `<button class="abtn" style="${n === pluginPage ? 'border-color:var(--brand2);color:var(--brand2)' : ''}" onclick="pluginPage=${n};page('plugins')">${n}</button>`
+  }).join('')
+  return `<div class="a-title">📦 插件库 <small>（事件驱动安全扫描 · 人工覆盖永不被同步覆盖）</small></div>
+  <div class="a-card">
+    <div class="frow">
+      <input id="pluginSearch" placeholder="搜索插件名 / 作者 / 仓库 / 安装地址 / 简介…" value="${esc(pluginQuery)}">
+      <button class="abtn pri" style="flex:none" onclick="pluginQuery=document.getElementById('pluginSearch').value.trim();pluginPage=1;page('plugins')">搜索</button>
+      <button class="abtn" style="flex:none" onclick="pluginQuery='';pluginPage=1;page('plugins')">重置</button>
+    </div>
+    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${total}</b> 个插件 · 第 ${pluginPage}/${pages} 页（每页 ${PLUGIN_PAGE_SIZE} 条）</div>
+    <table>
+      <tr><th>插件</th><th>作者</th><th>来源</th><th>⭐</th><th>📈日增</th><th>质量分</th><th>安全</th><th>状态</th><th>操作</th></tr>
+      ${rows || '<tr><td colspan="9" style="color:var(--tx2)">无匹配插件</td></tr>'}
+    </table>
+    ${pages > 1 ? `<div class="frow" style="margin-top:10px;flex-wrap:wrap">${pageBtns}</div>` : ''}
+  </div>`
+}
+
+RENDER.combos = async () => {
+  const combos = await api('/admin/combos')
+  const pending = combos.filter((c) => c.status === 'pending')
+  const rest = combos.filter((c) => c.status !== 'pending')
+  const row = (c, actions) => `<tr><td><b>${esc(c.name)}</b><br><span style="color:var(--tx2);font-size:11px">${esc(c.description)}</span></td><td>${esc(c.author)}</td><td>${c.members.length}</td><td>${c.status === 'published' ? '<span class="pill ok">已发布</span>' : c.status === 'removed' ? '<span class="pill ba">已下架</span>' : '<span class="pill wa">待审</span>'}</td><td>${actions}</td></tr>`
+  return `<div class="a-title">🗂 组合审核</div>
+  <div class="a-card"><h4>待审核（${pending.length}）</h4><table>
+    <tr><th>组合</th><th>作者</th><th>插件数</th><th>状态</th><th>操作</th></tr>
+    ${pending.map((c) => row(c, `<button class="abtn pri" onclick="comboAction('${c.id}','approve')">通过</button> <button class="abtn dan" onclick="comboAction('${c.id}','remove')">下架</button>`)).join('') || '<tr><td colspan="5" style="color:var(--tx2)">无待审核组合</td></tr>'}
+  </table></div>
+  <div class="a-card"><h4>全部组合</h4><table>
+    <tr><th>组合</th><th>作者</th><th>插件数</th><th>状态</th><th>操作</th></tr>
+    ${rest.map((c) => row(c, c.status === 'published' ? `<button class="abtn dan" onclick="comboAction('${c.id}','remove')">下架</button>` : `<button class="abtn pri" onclick="comboAction('${c.id}','approve')">恢复</button>`)).join('')}
+  </table></div>`
+}
+
+RENDER.users = async () => {
+  const users = await api('/admin/users')
+  return `<div class="a-title">👥 用户管理 <small>（仅 GitHub 登录 · 不采集头像）</small></div>
+  <div class="a-card"><table>
+    <tr><th>用户名</th><th>姓名</th><th>注册时间</th><th>组合数</th><th>状态</th><th>操作</th></tr>
+    ${users.map((u) => `<tr><td>${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td>${esc(u.registered_at.slice(0, 10))}</td><td>${u.combo_count}/3</td><td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill ba">已禁用</span>'}</td><td>${u.status === 'active' ? `<button class="abtn dan" onclick="userAction('${u.id}',true)">禁用</button>` : `<button class="abtn pri" onclick="userAction('${u.id}',false)">恢复</button>`}</td></tr>`).join('')}
+  </table></div>`
+}
+
+RENDER.reports = async () => {
+  const reports = await api('/admin/reports')
+  const pending = reports.filter((r) => r.status === 'pending')
+  const done = reports.filter((r) => r.status !== 'pending')
+  return `<div class="a-title">📥 上报队列 <small>（上报人数 = 收录优先级信号）</small></div>
+  <div class="a-card"><h4>⚡ 单独提速收录框</h4>
+    <div class="frow"><input id="ftUrl" placeholder="输入 GitHub 仓库地址，如 https://github.com/owner/repo"><button class="abtn pri" style="flex:none" onclick="fastTrack()">立即收录</button></div>
+    <div class="msg">单条触发提取管线：抓取 → 五级提取 → L0~L2 安全扫描，分钟级入库。</div>
+    <div class="msgbox" id="ftMsg" style="display:none"></div></div>
+  <div class="a-card"><h4>待处理上报</h4><table>
+    <tr><th>插件</th><th>仓库地址</th><th>版本</th><th>操作</th></tr>
+    ${pending.map((r) => `<tr><td><b>${esc(r.pkg)}</b></td><td style="font-size:11.5px;color:var(--tx2)">${esc(r.repo_url || '（未提供）')}</td><td>${esc(r.version)}</td><td>${r.repo_url ? `<button class="abtn pri" onclick="reportFastTrack('${r.id}','${esc(r.repo_url)}')">提速收录</button>` : `<button class="abtn">搜索候选</button>`} <button class="abtn" onclick="reportResolve(${r.id},'invalid')">标记无效</button></td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--tx2)">无待处理上报</td></tr>'}
+  </table></div>
+  <div class="a-card"><h4>已处理（归档）</h4><table>
+    <tr><th>插件</th><th>处理结果</th><th>时间</th></tr>
+    ${done.map((r) => `<tr><td>${esc(r.pkg)}</td><td>${r.status === 'included' ? '<span class="pill ok">已收录</span>' : '<span class="pill wa">无效</span>'}</td><td>${esc(r.created_at)}</td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--tx2)">暂无</td></tr>'}
+  </table></div>`
+}
+
+RENDER.anno = async () => {
+  const annos = await api('/admin/announcements')
+  return `<div class="a-title">📢 公告管理 <small>（发布 = 手动推送更新提醒 · 客户端叹号即源于此）</small></div>
+  <div class="a-card"><h4>发布新公告</h4>
+    <div class="frow"><input id="annVer" placeholder="版本号，如 v0.3.1"><select id="annLv"><option value="info">通知</option><option value="important">重要</option></select></div>
+    <div class="frow"><textarea id="annContent" rows="3" placeholder="更新内容（用户点击叹号后可见，支持历史回看）"></textarea></div>
+    <button class="abtn pri" onclick="publishAnno()">发布并推送提醒</button>
+    <div class="msgbox" id="annMsg" style="display:none"></div></div>
+  <div class="a-card"><h4>历史公告</h4><table>
+    <tr><th>版本</th><th>分级</th><th>来源</th><th>日期</th><th>操作</th></tr>
+    ${annos.map((a) => `<tr><td>${esc(a.version)}</td><td>${a.level === 'important' ? '<span class="pill ba">重要</span>' : '<span class="pill ok">通知</span>'}</td><td>${esc(a.origin_server)}</td><td>${esc(a.published_at)}</td><td><button class="abtn dan" onclick="delAnno('${a.id}')">下线</button></td></tr>`).join('')}
+  </table></div>`
+}
+
+RENDER.cfg = async () => {
+  const cfg = await api('/admin/config')
+  const sv = () => `<button class="sv" type="button" onclick="saveField(event)">保存</button>`
+  const num = (label, path, val) => `<div class="ci"><span class="lab">${label}</span><input data-path="${path}" data-kind="number" value="${esc(String(val))}">${sv()}</div>`
+  const text = (label, path, val, ph = '', wide = false) => `<div class="ci${wide ? ' wide' : ''}"><span class="lab">${label}</span><input class="${wide ? 'wide' : ''}" data-path="${path}" value="${esc(String(val))}" placeholder="${ph}">${sv()}</div>`
+  const pass = (label, path, ph) => `<div class="ci wide"><span class="lab">${label}</span><input class="wide" type="password" data-path="${path}" data-kind="password" placeholder="${ph}">${sv()}</div>`
+  const sel = (label, path, cur, opts) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}">${opts.map(([v, t]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
+  const bool = (label, path, cur) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}" data-kind="bool">${[['1', '开'], ['0', '关']].map(([v, t]) => `<option value="${v}" ${(cur ? '1' : '0') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
+  const tokens = cfg.sync.github_tokens || []
+  const methods = cfg.user.registration_methods || []
+  const f = cfg.feature
+  return `<div class="a-title">⚙️ 配置中心 <small>（每项独立保存 · 保存即生效 · 密钥热更新 · 写审计日志）</small></div>
+
+  <div class="a-card"><h4>🧾 认证凭证 <small>（GitHub 登录 = OAuth 应用；修改后即时生效，JWT 密钥更换后全员需重新登录）</small></h4><div class="cfg">
+    ${text('OAuth Client ID', 'auth.github_client_id', cfg.auth.github_client_id, '留空则回落到部署环境变量', true)}
+    ${pass('OAuth Client Secret', 'auth.github_client_secret', '输入新值后点保存；留空不修改（回落环境变量）')}
+    ${pass('JWT 签名密钥', 'auth.jwt_secret', '输入新值后点保存；留空不修改（回落环境变量）')}
+  </div></div>
+
+  <div class="a-card"><h4>🔐 管理员</h4><div class="cfg">
+    ${pass('管理页面访问密码', 'admin.password', '输入新值后点保存；留空不修改（回落环境变量 ADMIN_TOKEN）')}
+    <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">改密后旧密码立即失效，请用新密码重新进入；生产环境未设置时管理端不可用</span></div>
+  </div></div>
+
+  <div class="a-card"><h4>👥 账号与注册</h4><div class="cfg">
+    ${bool('开放注册', 'user.registration_enabled', cfg.user.registration_enabled)}
+    <div class="ci"><span class="lab">可用注册方式</span>
+      <label class="ck"><input type="checkbox" data-path="user.registration_methods" data-kind="methods" value="github" ${methods.includes('github') ? 'checked' : ''}>GitHub 登录（当前唯一支持）</label>${sv()}
+    </div>
+    ${num('每用户组合上限', 'user.combo_limit', cfg.user.combo_limit)}
+  </div></div>
+
+  <div class="a-card"><h4>🔎 GitHub 库同步</h4><div class="cfg">
+    <div class="ci wide"><span class="lab">搜索 token（classic PAT，一行一个，可填多枚轮换；留空回落到环境变量 GITHUB_TOKENS）</span><textarea data-path="sync.github_tokens" data-kind="tokens" rows="4" placeholder="ghp_xxx...">${tokens.map(esc).join('\n')}</textarea>${sv()}</div>
+    ${num('抓取间隔（小时）', 'sync.github_fetch_interval_h', cfg.sync.github_fetch_interval_h)}
+    ${num('插件数据心跳（分钟）', 'sync.data_heartbeat_min', cfg.sync.data_heartbeat_min)}
+    ${num('组数据刷新（分钟）', 'sync.combos_refresh_min', cfg.sync.combos_refresh_min)}
+    ${num('README 抓取上限（KB）', 'sync.readme_fetch_kb', cfg.sync.readme_fetch_kb)}
+  </div></div>
+
+  <div class="a-card"><h4>🏆 榜单与排序</h4><div class="cfg">
+    ${num('趋势榜条数', 'trending.size', cfg.trending.size)}
+    ${num('星数快照保留（天）', 'trending.snapshot_retention_days', cfg.trending.snapshot_retention_days)}
+    ${sel('默认排序', 'sort.default', cfg.sort.default, [['default', '综合'], ['stars', '星数'], ['likes', '赞数'], ['downloads', '近7天下载']])}
+    ${num('赞数时间衰减权重', 'rank.like_age_weight', cfg.rank.like_age_weight)}
+  </div></div>
+
+  <div class="a-card"><h4>🖥 界面与引导</h4><div class="cfg">
+    ${sel('默认主题', 'ui.default_theme', cfg.ui.default_theme, [['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']])}
+    ${num('窗口最小宽度（px）', 'ui.window_min.0', cfg.ui.window_min[0])}
+    ${num('窗口最小高度（px）', 'ui.window_min.1', cfg.ui.window_min[1])}
+    ${num('窗口最大宽度（px）', 'ui.window_max.0', cfg.ui.window_max[0])}
+    ${num('窗口最大高度（px）', 'ui.window_max.1', cfg.ui.window_max[1])}
+    ${num('首启自动打开次数（地址模式）', 'onboarding.auto_open_times', cfg.onboarding.auto_open_times)}
+    ${bool('通知徽标', 'notify.badge_enabled', cfg.notify.badge_enabled)}
+  </div></div>
+
+  <div class="a-card"><h4>🎚 功能开关</h4><div class="cfg">
+    ${bool('趋势榜', 'feature.trending', f.trending)}
+    ${bool('点赞', 'feature.likes', f.likes)}
+    ${bool('组合', 'feature.combos', f.combos)}
+    ${bool('公告', 'feature.announcements', f.announcements)}
+    ${bool('联邦（服务器间）', 'federation.enabled', cfg.federation.enabled)}
+  </div></div>
+
+  <div class="a-card"><h4>🛡 安全与风控</h4><div class="cfg">
+    ${sel('安全扫描层', 'security.scan_level', String(cfg.security.scan_level), [['0', '0 · 仅元数据'], ['1', '1 · 包级静态'], ['2', '2 · 代码模式'], ['3', '3 · 动态沙箱']])}
+    ${num('匿名凭证有效期（秒）', 'anon.token_ttl', cfg.anon.token_ttl)}
+    ${num('举报频率限制', 'report.rate_limit', cfg.report.rate_limit)}
+    ${num('风控 · 同 IP 账号数阈值', 'risk.like_same_ip_accounts', cfg.risk.like_same_ip_accounts)}
+    ${num('风控 · 同 IP 窗口（分钟）', 'risk.like_same_ip_window_min', cfg.risk.like_same_ip_window_min)}
+    ${num('风控 · 新账号窗口（分钟）', 'risk.like_new_account_min', cfg.risk.like_new_account_min)}
+    ${num('风控 · 切换窗口（分钟）', 'risk.like_toggle_window_min', cfg.risk.like_toggle_window_min)}
+    ${num('风控 · 切换次数阈值', 'risk.like_toggle_count', cfg.risk.like_toggle_count)}
+  </div></div>
+
+  <div class="a-card"><h4>✉️ 站内信与数据保留</h4><div class="cfg">
+    ${num('站内信限长（字）', 'message.max_length', cfg.message.max_length)}
+    ${num('站内信频率限制', 'message.rate_limit', cfg.message.rate_limit)}
+    ${num('还原点保留个数', 'restore.max_points', cfg.restore.max_points)}
+    ${num('非必要数据保留（天，0=永久）', 'retention.raw_data_days', cfg.retention.raw_data_days)}
+  </div></div>
+
+  <div class="a-card"><h4>⬆️ 系统更新检测 <small>（检测源地址与手动「一键检测」在「🔄 系统更新」页；此处保留自动检测节奏配置）</small></h4><div class="cfg">
+    ${num('自动检测间隔（分钟）', 'update.check_interval_min', cfg.update.check_interval_min)}
+    ${sel('跟踪通道', 'update.track', cfg.update.track, [['release', '正式版 Release'], ['commit', '提交']])}
+  </div></div>
+
+  <button class="abtn pri" onclick="saveCfg()">保存全部</button>
+  <div class="msgbox" id="cfgMsg" style="display:none"></div>`
+}
+
+/* ============ 操作 ============ */
+function flash(id, text, ok = true) {
+  const el = document.getElementById(id)
+  if (!el) return
+  el.textContent = text
+  el.style.display = 'block'
+  el.style.borderLeftColor = ok ? 'var(--brand2)' : 'var(--danger)'
+}
+async function act(fn, msgId, successText) {
+  try { await fn(); flash(msgId, successText) } catch (e) { flash(msgId, e.message, false) }
+}
+const fedHandshake = () => act(async () => { await post('/api/v1/federation/handshake', { from_url: document.getElementById('fedUrl').value, mode: 'snapshot' }); page('fed') }, 'fedMsg', '邀请已发送，等待对方接受')
+const fedAction = (id, action) => act(async () => { await post('/admin/federation', { id, action }); page('fed') }, 'fedMsg', '操作成功')
+const saveRepoUrl = () => act(async () => { const cfg = await api('/admin/config'); cfg.update.repo_url = document.getElementById('repoUrl').value; await put('/admin/config', cfg); page('upd') }, 'updLog', '检测源已保存')
+const checkUpdateNow = async () => {
+  try {
+    const r = await post('/admin/update/check', {})
+    flash('updCheck', r.message || '检测完成')
+    checkUpdateBanner()
+  } catch (e) { flash('updCheck', e.message, false) }
+}
+const saveClientPush = () => act(async () => {
+  const cfg = await api('/admin/config')
+  cfg.client.plugin_version = document.getElementById('cpVer').value.trim()
+  cfg.client.install_spec = document.getElementById('cpSpec').value.trim()
+  await put('/admin/config', cfg)
+  flash('cpMsg', '客户端插件推送已保存：manifest 已下发，客户端心跳后即弹更新横幅')
+}, 'cpMsg', '')
+const runUpdate = () => act(async () => { await post('/admin/update', { version: document.getElementById('targetVer').value }); page('upd') }, 'updLog', '更新流水线执行完毕（见日志）')
+const block = (pkg) => act(async () => { await post('/admin/blocklist', { pkg }); page('plugins') }, null, '')
+const unblock = (pkg) => act(async () => { await del(`/admin/blocklist/${pkg}`); page('plugins') }, null, '')
+const comboAction = (id, action) => act(async () => { await post('/admin/combos', { id, action }); page('combos') }, null, '')
+const userAction = (id, banned) => act(async () => { await post('/admin/users', { id, banned }); page('users') }, null, '')
+const fastTrack = () => act(async () => { const p = await post('/admin/fast-track', { repo_url: document.getElementById('ftUrl').value }); flash('ftMsg', `已收录：${p.id}（安全分 ${p.security.score}，风险标签 ${p.security.risk_tags.length} 个）`) }, 'ftMsg', '')
+const riskAction = (id, action) => act(async () => { await post('/admin/risk-queue', { id, action }); page('sec') }, 'riskMsg', action === 'include' ? '已计入该点赞（进入排行）' : '已清除该点赞')
+const reportFastTrack = (id, url) => act(async () => { await post('/admin/fast-track', { repo_url: url }); await post('/admin/reports', { id, status: 'included' }); page('reports') }, 'ftMsg', '已提速收录并归档')
+const reportResolve = (id, status) => act(async () => { await post('/admin/reports', { id, status }); page('reports') }, null, '')
+const publishAnno = () => act(async () => { await post('/admin/announcements', { version: document.getElementById('annVer').value, level: document.getElementById('annLv').value, content: document.getElementById('annContent').value }); page('anno') }, 'annMsg', '公告已发布，客户端下次心跳点亮叹号')
+const delAnno = (id) => act(async () => { await del(`/admin/announcements/${id}`); page('anno') }, null, '')
+function setPath(obj, path, val) {
+  const parts = path.split('.')
+  let cur = obj
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] == null) cur[parts[i]] = {}
+    cur = cur[parts[i]]
+  }
+  cur[parts[parts.length - 1]] = val
+}
+function fieldValue(el) {
+  const kind = el.dataset.kind
+  if (kind === 'password') {
+    if (!el.value.trim()) throw new Error('密码不能为空：输入新值后再保存')
+    return el.value
+  }
+  if (kind === 'tokens') return el.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
+  if (kind === 'bool') return el.value === '1'
+  if (kind === 'number') {
+    const n = Number(el.value)
+    if (el.value.trim() === '' || !Number.isFinite(n)) throw new Error('请输入有效数字')
+    return n
+  }
+  if (kind === 'methods') {
+    const checked = [...document.querySelectorAll('input[data-kind="methods"]:checked')].map((x) => x.value)
+    return checked.length ? checked : ['github']
+  }
+  return el.value
+}
+/** 单项保存：只改该项、其余配置不动（后端合并 + 白名单校验 + 热更新）。 */
+function saveField(evt) {
+  const btn = evt.currentTarget
+  const row = btn.closest('.ci')
+  const el = row && row.querySelector('[data-path]')
+  if (!el) return
+  const path = el.dataset.path
+  act(async () => {
+    const cfg = await api('/admin/config')
+    setPath(cfg, path, fieldValue(el))
+    await put('/admin/config', cfg)
+    btn.classList.add('ok')
+    btn.textContent = '✓ 已保存'
+    setTimeout(() => { btn.classList.remove('ok'); btn.textContent = '保存' }, 1500)
+  }, 'cfgMsg', '该项已保存并生效')
+}
+function saveCfg() {
+  act(async () => {
+    const cfg = await api('/admin/config')
+    const els = [...document.querySelectorAll('[data-path]')]
+    els.forEach((el) => {
+      if (el.dataset.kind === 'methods') return
+      if (el.dataset.kind === 'password' && el.value === '') return
+      setPath(cfg, el.dataset.path, fieldValue(el))
+    })
+    const methods = els.filter((el) => el.dataset.kind === 'methods' && el.checked).map((el) => el.value)
+    setPath(cfg, 'user.registration_methods', methods.length ? methods : ['github'])
+    await put('/admin/config', cfg)
+    page('cfg')
+  }, 'cfgMsg', '配置已保存并生效（密钥热更新 · 已写审计）')
+}
+
+if (adminToken) {
+  api('/admin/stats').then(() => {
+    document.getElementById('login').style.display = 'none'
+    document.getElementById('app').style.display = 'flex'
+    page('dash')
+  }).catch(showLogin)
+}
+</script>
+</body>
+</html>

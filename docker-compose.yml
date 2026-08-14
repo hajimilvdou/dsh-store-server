@@ -1,0 +1,67 @@
+# DSH 插件商城服务端 —— 编排（db + migrate + api + redis）
+# 生产部署：GH_IMAGE=<GitHub用户名>/<仓库名> docker compose pull && docker compose up -d
+#   （拉取 GitHub Actions 构建好的镜像，无需在服务器上构建）
+# 本地开发：docker compose up -d --build（本地构建）
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes: [pgdata:/var/lib/postgresql/data]
+    environment:
+      POSTGRES_USER: store
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请在 .env 设置 DB_PASSWORD}
+      POSTGRES_DB: dshstore
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U store -d dshstore"]
+      interval: 5s
+      retries: 12
+
+  migrate:
+    image: ghcr.io/${GH_IMAGE:-yourname/dsh-store-server}:latest
+    build: .
+    command: node dist/db/migrate.js
+    environment:
+      DATABASE_URL: postgres://store:${DB_PASSWORD}@db:5432/dshstore
+      MIGRATIONS_DIR: /app/db/migrations
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    image: ghcr.io/${GH_IMAGE:-yourname/dsh-store-server}:latest
+    build: .
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    environment:
+      DATABASE_URL: postgres://store:${DB_PASSWORD}@db:5432/dshstore
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      # 以下密钥均为可选：留空时在管理端「配置中心」填写（保存即热更新）。
+      # 环境变量仅作首启兜底。生产环境建议至少设置 ADMIN_TOKEN 与 OAuth 三项。
+      GITHUB_TOKENS: ${GITHUB_TOKENS:-}
+      SYNC_TOPIC: ${SYNC_TOPIC:-dsh-plugin}
+      SYNC_MAX_REPOS: ${SYNC_MAX_REPOS:-0}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      OAUTH_CALLBACK_URL: ${OAUTH_CALLBACK_URL:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      ACCESS_PASSWORD: ${ACCESS_PASSWORD:-}
+      FEDERATION_ENABLED: ${FEDERATION_ENABLED:-true}
+      FEDERATION_SECRET: ${FEDERATION_SECRET:-}
+      UPDATE_REPO_URL: ${UPDATE_REPO_URL:-}
+      CLUSTER_ID: ${CLUSTER_ID:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes: [redisdata:/data]
+
+volumes:
+  pgdata: {}
+  redisdata: {}

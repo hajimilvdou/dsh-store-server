@@ -1,0 +1,14 @@
+# 构建上下文排除：密钥与本地产物绝不进入镜像
+.env
+.env.*
+!.env.example
+node_modules/
+.npm-cache/
+dist/
+*.tsbuildinfo
+.git/
+.github/
+data/
+*.log
+docs/
+README.md
