@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { readFileSync, rmSync } from 'node:fs'
 import { loadEnvFile } from './env.js'
 import { SOFTWARE_NAME } from './shared/index.js'
 
@@ -77,6 +78,76 @@ if (!boot.auth.jwt_secret) boot.auth.jwt_secret = process.env.JWT_SECRET ?? ''
 if (!boot.admin.password) boot.admin.password = process.env.ADMIN_TOKEN ?? (demo ? 'mock-admin' : '')
 if (!boot.user.registration_methods.length) boot.user.registration_methods = ['github']
 repo.setConfig(boot)
+
+/**
+ * 容器热更新完成后，新容器启动时读取编排容器写入的结果标记，
+ * 把上一进程遗留的 running 状态收口为 done/failed —— 否则面板进度会永久卡在 55%。
+ */
+const finalizePanelUpdateState = (): void => {
+  const active = new Set(['fetching', 'building', 'migrating', 'switching', 'selfcheck'])
+  const state = repo.getUpdateState()
+  if (!active.has(state.stage)) return
+  try {
+    const marker = '/opt/dsh-store/api.update-result'
+    const text = readFileSync(marker, 'utf8').trim()
+    rmSync(marker, { force: true })
+    if (!text) return
+    const [status, image] = text.split(/\s+/)
+    const finishedAt = new Date().toISOString()
+    if (status === 'OK') {
+      repo.setUpdateState({
+        ...state,
+        stage: 'done',
+        progress_pct: 100,
+        message: `容器热更新完成：${image ?? state.to_version}`,
+        error: null,
+        finished_at: finishedAt,
+        log: [...state.log, `panel-update: ${text}`],
+      })
+    } else if (status === 'FAIL') {
+      repo.setUpdateState({
+        ...state,
+        stage: 'failed',
+        progress_pct: 100,
+        message: `容器热更新失败并已回滚：${image ?? state.to_version}`,
+        error: text,
+        finished_at: finishedAt,
+        log: [...state.log, `panel-update: ${text}`],
+      })
+    }
+  } catch {
+    /* 没有结果标记（旧版本更新脚本/异常中断）：用当前镜像 tag 推断上次结果，避免进度永久卡住 */
+    try {
+      const currentImage = readFileSync('/opt/dsh-store/api.current-image', 'utf8').trim()
+      const tag = currentImage.match(/:([^:/]+)$/)?.[1] ?? ''
+      const finishedAt = new Date().toISOString()
+      if (tag && state.to_version && (tag === state.to_version || tag.startsWith(state.to_version))) {
+        repo.setUpdateState({
+          ...state,
+          stage: 'done',
+          progress_pct: 100,
+          message: `容器热更新完成（按当前镜像推断）：${currentImage}`,
+          error: null,
+          finished_at: finishedAt,
+          log: [...state.log, `panel-update: current-image=${currentImage}`],
+        })
+      } else {
+        repo.setUpdateState({
+          ...state,
+          stage: 'failed',
+          progress_pct: 100,
+          message: '上次容器热更新被中断，结果无法确认；请按当前镜像状态手动确认',
+          error: `缺少更新结果标记，当前镜像=${currentImage || 'unknown'}`,
+          finished_at: finishedAt,
+          log: [...state.log, 'panel-update: missing result marker'],
+        })
+      }
+    } catch {
+      /* 非容器部署 */
+    }
+  }
+}
+finalizePanelUpdateState()
 
 sync.setTokens(boot.sync.github_tokens)
 sync.setMaxRepos(boot.sync.max_repos)

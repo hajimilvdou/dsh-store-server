@@ -74,6 +74,7 @@ RUNEOF
     --entrypoint sh docker:cli -c '
       set -e
       IMAGE="$1"; OLD="$2"; NET="$3"
+      rm -f /opt/dsh-store/api.update-result
       echo "==> 拉取并重建 dshstore-api → $IMAGE"
       docker pull "$IMAGE" >/dev/null
       docker rm -f dshstore-api
@@ -82,11 +83,13 @@ RUNEOF
       sleep 10
       if docker exec dshstore-api wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1; then
         echo "$IMAGE" > /opt/dsh-store/api.current-image
+        echo "OK $IMAGE" > /opt/dsh-store/api.update-result
         echo "✅ 面板热更新完成：$IMAGE"
       else
         echo "✗ 自检失败，回滚到 $OLD" >&2
         docker rm -f dshstore-api
         sh /opt/dsh-store/api.run.sh "$OLD"
+        echo "FAIL $OLD" > /opt/dsh-store/api.update-result
         echo "已回滚到 $OLD" >&2
         exit 1
       fi
