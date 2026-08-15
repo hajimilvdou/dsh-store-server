@@ -4,6 +4,8 @@ export interface ScanInput {
   pkg: string
   version: string
   repo: string
+  /** Agent(Preset) 目录名；存在时按预设文件扫描（不依赖 npm 包）。 */
+  presetName?: string
 }
 
 interface PkgJson {
@@ -23,6 +25,17 @@ interface PkgJson {
  */
 export async function scanPlugin(input: ScanInput): Promise<SecurityProfile> {
   const tags: RiskTag[] = []
+
+  if (input.presetName) {
+    const presetText = await fetchPresetFiles(input.repo, input.presetName)
+    if (presetText) {
+      if (/curl\s+|wget\s+|fetch\s*\(|https?:\/\/[^\s"']+/.test(presetText)) tags.push('suspicious_network')
+      if (/\beval\s*\(|base64\s+-d|atob\s*\(|new Function/.test(presetText)) tags.push('obfuscated')
+      if (/(KEY|TOKEN|SECRET|PASSWORD)\s*[:=]/.test(presetText)) tags.push('reads_secret_env')
+      return { level: 2, score: Math.max(0, 100 - tags.length * 15), risk_tags: [...new Set(tags)], blocked: false }
+    }
+    return { level: 0, score: 80, risk_tags: [], blocked: false }
+  }
 
   const pkgJson = await fetchPackageJson(input.pkg, input.version)
   if (pkgJson) {
@@ -44,6 +57,28 @@ export async function scanPlugin(input: ScanInput): Promise<SecurityProfile> {
   const level: 0 | 1 | 2 | 3 = code ? 2 : pkgJson ? 1 : 0
   const score = Math.max(0, 100 - tags.length * 15)
   return { level, score, risk_tags: [...new Set(tags)], blocked: false }
+}
+
+/** 拉取 Agent 预设目录的核心文件做静态扫描（agent.cordis.yml / preset.yml / 脚本）。 */
+async function fetchPresetFiles(repo: string, presetName: string): Promise<string | null> {
+  const files = [
+    `preset/${presetName}/agent.cordis.yml`,
+    `preset/${presetName}/preset.yml`,
+    `preset/${presetName}/setup.sh`,
+    `preset/${presetName}/install.sh`,
+  ]
+  const chunks: string[] = []
+  for (const file of files) {
+    try {
+      const res = await fetch(`https://raw.githubusercontent.com/${repo}/HEAD/${file}`, {
+        headers: { 'User-Agent': 'dsh-store-server' },
+      })
+      if (res.ok) chunks.push((await res.text()).slice(0, 64 * 1024))
+    } catch {
+      /* 网络失败降级 */
+    }
+  }
+  return chunks.length ? chunks.join('\n') : null
 }
 
 async function fetchPackageJson(pkg: string, version: string): Promise<PkgJson | null> {

@@ -41,7 +41,7 @@ tr:hover td{background:var(--hover)}
 .a-main{flex:1;overflow-y:auto;padding:18px 22px}
 .a-title{font-size:17px;font-weight:700;margin-bottom:14px}
 .a-title small{font-size:12px;color:var(--tx2);font-weight:400}
-.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.stat-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
 .stat{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:14px}
 .stat .v{font-size:23px;font-weight:800;color:var(--tx);word-break:break-all}
 .stat .k{font-size:12px;color:var(--tx2);margin-top:3px}
@@ -339,9 +339,12 @@ RENDER.dash = async () => {
   const pendingCombos = combos.filter((c) => c.status === 'pending').length
   const pendingReports = reports.filter((r) => r.status === 'pending').length
   const needsReview = plugins.filter((p) => p.status === 'needs_review').length
+  const agentCount = plugins.filter((p) => p.kind === 'preset').length
+  const pluginCount = plugins.length - agentCount
   return `<div class="a-title">📊 仪表盘</div>
   <div class="stat-row">
-    <div class="stat"><div class="v">${stats.plugins_total}</div><div class="k">收录插件</div><div class="s">↑ 今日收录同步中</div></div>
+    <div class="stat"><div class="v">${pluginCount}</div><div class="k">收录插件</div><div class="s">↑ 今日收录同步中</div></div>
+    <div class="stat"><div class="v">${agentCount}</div><div class="k">Agent 预设</div><div class="s">kind=preset · 独立页面管理</div></div>
     <div class="stat"><div class="v">${stats.users_registered}</div><div class="k">注册用户（GitHub）</div><div class="s">↑ 今日 +${stats.today_new_users}</div></div>
     <div class="stat"><div class="v">${stats.combos_published}</div><div class="k">组合已发布</div><div class="s">待审 ${pendingCombos}</div></div>
     <div class="stat"><div class="v" style="font-size:16px">${esc(stats.today_star_champion || '—')}</div><div class="k">今日星增冠军</div><div class="s">趋势榜已更新</div></div>
@@ -349,6 +352,7 @@ RENDER.dash = async () => {
   <div class="a-card"><h4>同步状态</h4><table>
     <tr><th>任务</th><th>状态</th><th>结果</th><th style="width:120px">操作</th></tr>
     <tr><td>GitHub 增量同步（topic:dsh-plugin）</td><td>${sync.enabled ? '<span class="pill ok">已启用（token ×' + sync.tokens + '）</span>' : '<span class="pill wa">未配置 GITHUB_TOKENS</span>'}</td><td>${esc(sync.last_result || '—')}</td><td><button class="abtn pri" onclick="startSyncNow()">▶ 立即抓取</button></td></tr>
+    <tr><td>Plugin / Agent 识别</td><td><span class="pill ok">同步管线自动识别</span></td><td>package.json(dsh) → Plugin · preset/agent.cordis.yml → Agent</td><td>—</td></tr>
     <tr><td>⭐ 星数快照 / 趋势榜重算</td><td><span class="pill ok">随同步任务</span></td><td>${esc(sync.last_run_at || '—')}</td><td>—</td></tr>
   </table>
   <div class="msgbox" id="syncMsg" style="display:none"></div></div>
@@ -543,20 +547,24 @@ RENDER.agents = async () => {
     <td>${esc(p.author || '—')}</td>
     <td style="font-size:11.5px">${esc(p.description || '—')}</td>
     <td>${p.stars}</td><td>${p.downloads_7d}</td>
+    <td>${p.security.blocked ? '<span class="secbadge ba">已拉黑</span>' : p.security.risk_tags.length ? `<span class="secbadge wa">${p.security.risk_tags.length} 风险</span>` : `<span class="secbadge ok">L${p.security.level}</span>`}</td>
     <td>${p.status === 'blocked' ? '<span class="pill ba">已拉黑</span>' : p.status === 'needs_review' ? '<span class="pill wa">待完善</span>' : '<span class="pill ok">已收录</span>'}</td>
-    <td><a href="${esc(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--brand1);text-decoration:none;font-size:11.5px">源地址 ↗</a></td>
+    <td><a href="${esc(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--brand1);text-decoration:none;font-size:11.5px">源地址 ↗</a> ${p.security.blocked ? `<button class="abtn" onclick="unblock('${p.id}')">解除拉黑</button>` : `<button class="abtn dan" onclick="block('${p.id}')">拉黑</button>`}</td>
   </tr>`).join('')
+  api('/admin/scan/status').then((st) => { renderScanBanner(st); if (st.running) pollScan() }).catch(() => {})
   return `<div class="a-title">🤖 Agent 预设 <small>（kind=preset · 用户安装 = 复制到 ~/.dsh/.agent-presets/&lt;preset_name&gt;）</small></div>
+  <div id="scanBanner" class="update-banner" style="display:none"></div>
   <div class="a-card">
     <div class="frow">
       <input id="agentSearch" placeholder="搜索 Agent 名称 / 预设名 / 简介…" value="${esc(agentQuery)}">
       <button class="abtn pri" style="flex:none" onclick="agentQuery=document.getElementById('agentSearch').value.trim();page('agents')">搜索</button>
       <button class="abtn" style="flex:none" onclick="agentQuery='';page('agents')">重置</button>
+      <button class="abtn pri" style="flex:none" onclick="startScanAll()">🛡 扫描 Agent 文件</button>
     </div>
-    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${agents.length}</b> 个 Agent 预设</div>
+    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${agents.length}</b> 个 Agent 预设 · 一键扫描会检查 agent.cordis.yml / preset.yml / 脚本中的外联、混淆、密钥读取等风险</div>
     <table>
-      <tr><th>Agent</th><th>作者</th><th>简介</th><th>⭐</th><th>7天下载</th><th>状态</th><th>操作</th></tr>
-      ${rows || '<tr><td colspan="7" style="color:var(--tx2)">暂无 Agent 预设</td></tr>'}
+      <tr><th>Agent</th><th>作者</th><th>简介</th><th>⭐</th><th>7天下载</th><th>安全</th><th>状态</th><th>操作</th></tr>
+      ${rows || '<tr><td colspan="8" style="color:var(--tx2)">暂无 Agent 预设</td></tr>'}
     </table>
   </div>`
 }
@@ -807,8 +815,8 @@ function pollScan() {
       renderScanBanner(st)
       if (!st.running) {
         clearInterval(scanTimer)
-        // 仅当仍停留在插件库页时刷新列表（避免把用户从其他页面拽回来）
-        if (st.done > 0 && document.getElementById('scanBanner')) page('plugins')
+        // 停留在插件库/Agent 页时刷新当前页列表（避免把用户从其他页面拽回来）
+        if (st.done > 0 && document.getElementById('scanBanner')) page(currentPage === 'agents' ? 'agents' : 'plugins')
       }
     } catch { /* 页面切换后忽略 */ }
   }, 2000)

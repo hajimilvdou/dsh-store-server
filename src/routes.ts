@@ -481,7 +481,7 @@ export async function registerRoutes(
           if (!p) return
           if (runtime.scanProgress) runtime.scanProgress.current = p.id
           try {
-            const profile = await scanPlugin({ pkg: p.id, version: p.version, repo: p.repo })
+            const profile = await scanPlugin({ pkg: p.id, version: p.version, repo: p.repo, presetName: p.preset_name })
             repo.setPluginSecurity(p.id, profile)
             if (profile.risk_tags.length > 0) risk++
           } catch {
@@ -567,7 +567,7 @@ export async function registerRoutes(
     const p = repo.fastTrack(repoUrl.trim())
     repo.log('admin', 'fast-track', { repo_url: repoUrl })
     // 事件驱动安全扫描（L0~L2），网络不可用自动降级不阻断
-    const profile = await scanPlugin({ pkg: p.id, version: p.version, repo: p.repo })
+    const profile = await scanPlugin({ pkg: p.id, version: p.version, repo: p.repo, presetName: p.preset_name })
     repo.setPluginSecurity(p.id, profile)
     return { ...p, security: profile }
   })
