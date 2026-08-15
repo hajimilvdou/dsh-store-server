@@ -111,6 +111,7 @@ export class MemoryRepo implements Repo {
       source,
       stars,
       stars_delta_day,
+      stars_delta_7d: Math.round(stars_delta_day * 4.6),
       trending_rank: i < 20 ? i + 1 : null,
       likes,
       downloads_7d: Math.round(stars * 0.31),
@@ -139,6 +140,7 @@ export class MemoryRepo implements Repo {
         source: 'community',
         stars: 1388,
         stars_delta_day: 55,
+        stars_delta_7d: 253,
         trending_rank: null,
         likes: 42,
         downloads_7d: 331,
@@ -164,6 +166,7 @@ export class MemoryRepo implements Repo {
         source: 'community',
         stars: 764,
         stars_delta_day: 28,
+        stars_delta_7d: 129,
         trending_rank: null,
         likes: 19,
         downloads_7d: 208,
@@ -270,6 +273,10 @@ export class MemoryRepo implements Repo {
 
   likeCount(target: string): number {
     return this.likes.filter((l) => l.target === target).length
+  }
+
+  getUserLikes(userId: string): string[] {
+    return this.likes.filter((l) => l.user_id === userId).map((l) => l.target)
   }
 
   toggleLike(userId: string, target: string): { count: number; liked: boolean } {
@@ -381,6 +388,7 @@ export class MemoryRepo implements Repo {
       source: 'community',
       stars: 0,
       stars_delta_day: 0,
+      stars_delta_7d: 0,
       trending_rank: null,
       likes: 0,
       downloads_7d: 0,

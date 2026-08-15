@@ -289,6 +289,13 @@ export async function registerRoutes(
     return { target, likes: res.count, liked: res.liked }
   })
 
+  /* ================= 查询我的点赞（登录；客户端初始化已赞状态用） ================= */
+  app.get(API.meLikes, async (req, reply): Promise<string[]> => {
+    const u = requireUser(req, reply)
+    if (!u) return []
+    return repo.getUserLikes(u.userId)
+  })
+
   /* ================= 创建组合（登录） ================= */
   app.post<{ Body: { name: string; description?: string; members?: string[] } }>(API.createCombo, async (req, reply) => {
     const u = requireUser(req, reply)

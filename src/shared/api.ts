@@ -23,6 +23,8 @@ export const API = {
   downloads: '/api/v1/downloads',
   /** 点赞 / 取消点赞（登录；疑似刷赞进风控队列）。 */
   like: '/api/v1/likes',
+  /** 查询我点赞过的目标清单（登录；返回 target 字符串数组，插件包名或组合联邦 id）。 */
+  meLikes: '/api/v1/me/likes',
   /** 创建组合（登录）。 */
   createCombo: '/api/v1/combos',
   /** 云端安装清单读写（登录）。 */

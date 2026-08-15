@@ -57,6 +57,8 @@ export interface Plugin {
   stars: number
   /** 日增星数（当日快照 − 前一快照；新收录首日标记 new 不参与排行）。 */
   stars_delta_day: number
+  /** 近 7 天 GitHub 星数增量（当日快照 − 7 天前快照；收录不足 7 天用最早快照）。用户端"近7天收藏增加"指标。 */
+  stars_delta_7d: number
   /** 趋势榜名次（1~trending_size，不在榜内为 null）。 */
   trending_rank: number | null
   /** 本站点赞（登录后互动）。 */

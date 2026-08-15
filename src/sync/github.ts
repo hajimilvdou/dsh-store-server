@@ -332,6 +332,7 @@ export class GithubSync {
       source: 'community',
       stars: repo.stargazers_count,
       stars_delta_day: 0,
+      stars_delta_7d: 0,
       trending_rank: null,
       likes: 0,
       downloads_7d: 0,
@@ -470,6 +471,31 @@ export class GithubSync {
         p.is_new = true
         p.stars_delta_day = 0
       }
+    }
+    // 近 7 天星增（用户端"近7天收藏增加"指标）：
+    // 今日 −（date ≤ 7天前的最近快照）；收录不足 7 天用最早快照（= 收录以来全部增量）。
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10)
+    const snapsByRepo = new Map<string, StarSnapshot[]>()
+    for (const s of target.starSnapshots) {
+      const arr = snapsByRepo.get(s.repo) ?? []
+      arr.push(s)
+      snapsByRepo.set(s.repo, arr)
+    }
+    for (const p of target.plugins) {
+      const todayS = todayStars.get(p.repo)
+      if (todayS === undefined) continue
+      const arr = (snapsByRepo.get(p.repo) ?? []).sort((a, b) => a.date.localeCompare(b.date))
+      if (arr.length === 0) {
+        p.stars_delta_7d = 0
+        continue
+      }
+      let base: StarSnapshot | undefined
+      for (const s of arr) {
+        if (s.date <= weekAgo) base = s
+        else break
+      }
+      base ??= arr[0]
+      p.stars_delta_7d = Math.max(0, todayS - base.stars)
     }
     const ranked = target.plugins
       .filter((p) => !p.is_new)

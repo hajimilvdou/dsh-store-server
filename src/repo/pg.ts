@@ -16,6 +16,7 @@ interface PluginRow {
   source: 'official' | 'community'
   stars: number
   stars_delta_day: number
+  stars_delta_7d: number
   trending_rank: number | null
   likes: number
   downloads_7d: number
@@ -48,6 +49,7 @@ function rowToPlugin(r: PluginRow): Plugin {
     source: r.source,
     stars: r.stars,
     stars_delta_day: r.stars_delta_day,
+    stars_delta_7d: r.stars_delta_7d,
     trending_rank: r.trending_rank,
     likes: r.likes,
     downloads_7d: r.downloads_7d,
@@ -65,7 +67,7 @@ function rowToPlugin(r: PluginRow): Plugin {
 
 function pluginToRow(p: Plugin): unknown[] {
   return [
-    p.id, p.kind, p.preset_name ?? null, p.version, p.name, p.description, p.repo, p.repo_url, p.source, p.stars, p.stars_delta_day,
+    p.id, p.kind, p.preset_name ?? null, p.version, p.name, p.description, p.repo, p.repo_url, p.source, p.stars, p.stars_delta_day, p.stars_delta_7d,
     p.trending_rank, p.likes, p.downloads_7d, p.quality_score, JSON.stringify(p.tags), p.compat,
     // author/install 列 NOT NULL：数据缺失时用安全占位，绝不落 NULL（否则首启种子落库直接崩溃）
     p.author || '社区', p.install || '',
@@ -74,8 +76,8 @@ function pluginToRow(p: Plugin): unknown[] {
   ]
 }
 
-const PLUGIN_COLS = 'id, kind, preset_name, version, name, description, repo, repo_url, source, stars, stars_delta_day, trending_rank, likes, downloads_7d, quality_score, tags, compat, author, install, is_new, security_level, security_score, risk_tags, blocked, status, updated_at'
-const PLUGIN_PLACEHOLDERS = Array.from({ length: 26 }, (_, i) => `$${i + 1}`).join(',')
+const PLUGIN_COLS = 'id, kind, preset_name, version, name, description, repo, repo_url, source, stars, stars_delta_day, stars_delta_7d, trending_rank, likes, downloads_7d, quality_score, tags, compat, author, install, is_new, security_level, security_score, risk_tags, blocked, status, updated_at'
+const PLUGIN_PLACEHOLDERS = Array.from({ length: 27 }, (_, i) => `$${i + 1}`).join(',')
 
 /**
  * PostgreSQL 仓库（v3.5 D1）：启动时从 PG 加载全量工作集到内存（数据量小），
@@ -254,7 +256,7 @@ export class PgRepo extends MemoryRepo {
     for (const p of this.plugins) {
       this.fire(
         `INSERT INTO plugins (${PLUGIN_COLS}) VALUES (${PLUGIN_PLACEHOLDERS})
-         ON CONFLICT (id) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
+         ON CONFLICT (id) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, stars_delta_7d = EXCLUDED.stars_delta_7d, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
         pluginToRow(p),
       )
     }
@@ -268,6 +270,10 @@ export class PgRepo extends MemoryRepo {
     if (r.liked) this.fire('INSERT INTO likes (user_id, target) VALUES ($1,$2) ON CONFLICT DO NOTHING', [userId, target])
     else this.fire('DELETE FROM likes WHERE user_id = $1 AND target = $2', [userId, target])
     return r
+  }
+
+  override getUserLikes(userId: string): string[] {
+    return this.likes.filter((l) => l.user_id === userId).map((l) => l.target)
   }
 
   override applyLikeCount(target: string, count: number): void {

@@ -28,6 +28,8 @@ export interface Repo {
   pluginsDelta(since?: string): Delta<Plugin>
   combosDelta(since?: string): Delta<Combo>
   likeCount(target: string): number
+  /** 查询某用户点赞过的目标清单（插件包名 / 组合联邦 id）。 */
+  getUserLikes(userId: string): string[]
   countPlugins(): number
   countBlocked(): number
   countCombosByStatus(status: Combo['status']): number
