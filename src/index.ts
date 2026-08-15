@@ -21,7 +21,7 @@ const config = loadConfig(process.env)
 const auth = new AuthService(process.env)
 const sync = new GithubSync(process.env)
 const alerts = new AlertService(config.alert.webhook)
-const runtime: RuntimeState = { clockDriftMs: 0, rateLimited: 0, authFailures: 0, blockedRequests: 0, apiRequests: 0, apiErrors: 0, latestRelease: null, latestCommit: null }
+const runtime: RuntimeState = { clockDriftMs: 0, rateLimited: 0, authFailures: 0, blockedRequests: 0, apiRequests: 0, apiErrors: 0, latestRelease: null, latestCommit: null, scanProgress: null }
 
 // 仓库选择：DATABASE_URL 就绪 → PostgreSQL（启动加载 + 写穿）；否则内存仓库。
 // 演示假数据仅注入「纯内存且纯离线」模式（无数据库、无 GitHub token、未配置 OAuth）：
@@ -65,6 +65,10 @@ if (boot.sync.github_tokens.length === 0) {
     .map((s) => s.trim())
     .filter(Boolean)
 }
+// SYNC_MAX_REPOS 环境变量优先于仓库配置：本地测试可设 100，生产不设时保持默认 0 = 全量。
+if (process.env.SYNC_MAX_REPOS !== undefined && process.env.SYNC_MAX_REPOS.trim() !== '') {
+  boot.sync.max_repos = config.sync.max_repos
+}
 if (!boot.auth.github_client_id) boot.auth.github_client_id = process.env.GITHUB_OAUTH_CLIENT_ID ?? ''
 if (!boot.auth.github_client_secret) boot.auth.github_client_secret = process.env.GITHUB_OAUTH_CLIENT_SECRET ?? ''
 if (!boot.auth.jwt_secret) boot.auth.jwt_secret = process.env.JWT_SECRET ?? ''
@@ -75,6 +79,7 @@ if (!boot.user.registration_methods.length) boot.user.registration_methods = ['g
 repo.setConfig(boot)
 
 sync.setTokens(boot.sync.github_tokens)
+sync.setMaxRepos(boot.sync.max_repos)
 auth.configure({ clientId: boot.auth.github_client_id, clientSecret: boot.auth.github_client_secret, jwtSecret: boot.auth.jwt_secret })
 
 const app = Fastify({
@@ -92,7 +97,30 @@ app.addHook('onClose', async () => {
 // 防护守卫：读/写/认证按 IP 限流（429 + 告警）
 installGuards(app, alerts, runtime)
 
-await registerRoutes(app, repo, config, auth, sync, alerts, runtime, updater)
+// GitHub 收录同步调度（仅定时触发）：
+// - 启动不立即同步；每轮按配置间隔 github_fetch_interval_h（最低 1 小时）定时执行；
+// - 管理端 POST /admin/sync 手动触发，不受此调度器影响；
+// - 配置中心保存搜索 token 发生变化时调用 resetSyncSchedule() 重置倒计时（只重置、不立即同步）。
+let syncTimer: NodeJS.Timeout | null = null
+const scheduleSync = (): void => {
+  if (syncTimer) clearTimeout(syncTimer)
+  const hours = Math.max(1, repo.getConfig().sync.github_fetch_interval_h)
+  syncTimer = setTimeout(() => {
+    syncTimer = null
+    void (async () => {
+      if (sync.enabled && !sync.isRunning()) {
+        await sync.runSync(repo.syncTarget())
+        await repo.persistSync()
+      }
+    })().finally(() => {
+      scheduleSync()
+    })
+  }, hours * 3600_000)
+}
+const resetSyncSchedule = (): void => scheduleSync()
+scheduleSync()
+
+await registerRoutes(app, repo, config, auth, sync, alerts, runtime, updater, resetSyncSchedule)
 
 // 时钟自检（v3.6 U5）：启动 + 每小时；>500ms 告警，>5s 拒签凭证（/auth/callback）
 const runClockCheck = async () => {
@@ -112,19 +140,6 @@ if (!sync.enabled && !auth.enabled) {
 } else {
   app.log.warn('注意：管理口令强度不足会削弱安全；建议使用强随机值（可通过 ADMIN_TOKEN 或配置中心设置）')
 }
-
-// GitHub 同步调度：常驻自检——配置中心保存 token 后无需重启即可同步（每轮读最新配置）
-const scheduleSync = (): void => {
-  void (async () => {
-    if (sync.enabled) {
-      void sync.runSync(repo.syncTarget()).then(() => repo.persistSync())
-    }
-  })().finally(() => {
-    const hours = Math.max(1, repo.getConfig().sync.github_fetch_interval_h)
-    setTimeout(scheduleSync, hours * 3600_000)
-  })
-}
-scheduleSync()
 
 // 本项目更新提醒（v3.7 V1）：按配置间隔检测，只提醒不自动更。
 // 跟踪通道（release / commit）与仓库地址、间隔在配置中心修改后下一轮检测即生效（每轮动态读取配置）。

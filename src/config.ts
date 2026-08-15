@@ -13,6 +13,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     v === undefined || v.trim() === '' ? fallback : v === '1' || v.toLowerCase() === 'true'
 
   cfg.sync.github_fetch_interval_h = num(env.SYNC_FETCH_INTERVAL_H, cfg.sync.github_fetch_interval_h)
+  cfg.sync.max_repos = num(env.SYNC_MAX_REPOS, cfg.sync.max_repos)
   cfg.sync.data_heartbeat_min = num(env.SYNC_HEARTBEAT_MIN, cfg.sync.data_heartbeat_min)
   cfg.trending.size = num(env.TRENDING_SIZE, cfg.trending.size)
   cfg.server.access_password = env.ACCESS_PASSWORD ?? cfg.server.access_password

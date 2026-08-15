@@ -62,7 +62,13 @@ const page = await fetch(BASE + '/admin').then((r) => r.text())
 check('管理页含版本横幅逻辑', page.includes('updateBanner') && page.includes('服务端有新版本'))
 check('管理页含一键检测与客户端推送', page.includes('一键检测') && page.includes('客户端插件版本推送'))
 check('管理页含跟踪通道文案', page.includes('跟踪通道') && page.includes('commit 通道'))
+check('管理页含更新横幅忽略', page.includes('ignoreUpdate'))
+check('管理页含插件库一键扫描', page.includes('startScanAll') && page.includes('scanBanner'))
 check('管理页含配置项独立保存', page.includes('saveField'))
+
+// 6. 一键安全扫描：状态端点可读（不实际跑全量扫描）
+const scanSt = await call('/admin/scan/status', { headers: H })
+check('扫描状态端点可读', scanSt.status === 200 && typeof scanSt.body.total === 'number' && typeof scanSt.body.running === 'boolean', JSON.stringify({ total: scanSt.body.total, running: scanSt.body.running }))
 
 console.log(failed === 0 ? '\n全部通过 ✅（版本推送专项）' : `\n${failed} 项失败 ❌`)
 process.exitCode = failed === 0 ? 0 : 1

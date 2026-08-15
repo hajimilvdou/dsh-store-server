@@ -42,6 +42,7 @@ export async function registerRoutes(
   alerts: AlertService,
   runtime: RuntimeState,
   updater: UpdateService,
+  resetSyncSchedule: () => void,
 ): Promise<void> {
   // 纯离线演示模式：未配置 OAuth 且未配置 GitHub token 时才接受演示账号（生产不残留后门）
   const demoMode = !auth.enabled && !sync.enabled
@@ -79,6 +80,42 @@ export async function registerRoutes(
       runtime.authFailures++
       void alerts.send('管理端失败', `管理端凭证错误：${req.method} ${req.url}（IP ${req.ip ?? 'unknown'}）`)
       void reply.code(401).send({ error: 'unauthorized', message: '需要管理员凭证' })
+      return false
+    }
+    return true
+  }
+
+  // 源服务器连接密码（server.access_password，配置中心保存后热更新）：
+  // 非空时，客户端数据通道（/api/v1/* 与 /health）必须携带 X-Access-Password；
+  // /auth/*（OAuth 浏览器流程）、/admin/*（管理端自鉴权）与 /federation/*（联邦密码）不受此限制。
+  app.addHook('onRequest', async (req, reply) => {
+    const expected = repo.getConfig().server.access_password
+    if (!expected) return
+    const path = req.url.split('?')[0]
+    const isClientData = path === '/health' || (path.startsWith('/api/v1/') && !path.startsWith('/api/v1/federation/'))
+    if (!isClientData) return
+    if (req.headers['x-access-password'] !== expected) {
+      runtime.blockedRequests++
+      void alerts.send('源连接密码拒绝', `源连接密码缺失或错误：${req.method} ${req.url}（IP ${req.ip ?? 'unknown'}）`)
+      void reply.code(401).send({ error: 'access_password_required', message: '服务器连接密码缺失或不正确（请求头 X-Access-Password）' })
+    }
+  })
+
+  // 联邦密码（federation.secret）：服务器间接口只认 X-Federation-Secret，不要求管理端口令。
+  const requireFederation = (req: FastifyRequest, reply: FastifyReply): boolean => {
+    const fed = repo.getConfig().federation
+    if (!fed.enabled) {
+      void reply.code(503).send({ error: 'federation_disabled', message: '本服务器未开启联邦（管理端配置中心可开启）' })
+      return false
+    }
+    if (!fed.secret) {
+      void reply.code(503).send({ error: 'not_configured', message: '本服务器未配置联邦密码（管理端配置中心可设置）' })
+      return false
+    }
+    if (req.headers['x-federation-secret'] !== fed.secret) {
+      runtime.blockedRequests++
+      void alerts.send('联邦密码拒绝', `联邦密码缺失或错误：${req.method} ${req.url}（IP ${req.ip ?? 'unknown'}）`)
+      void reply.code(401).send({ error: 'federation_secret_required', message: '联邦密码缺失或不正确（请求头 X-Federation-Secret）' })
       return false
     }
     return true
@@ -317,7 +354,7 @@ export async function registerRoutes(
 
   /* ================= 联邦（服务器间） ================= */
   app.post<{ Body: { from_url: string; share?: Record<string, unknown>; mode?: 'snapshot' | 'realtime' } }>(API.federationHandshake, async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
+    if (!requireFederation(req, reply)) return
     const fromUrl = req.body?.from_url
     if (typeof fromUrl !== 'string' || !fromUrl.trim()) {
       return reply.code(400).send({ error: 'bad_request', message: '对方地址必填' })
@@ -326,9 +363,12 @@ export async function registerRoutes(
     repo.log('admin', 'federation.handshake', { peer: fromUrl })
     return { ok: true, message: '邀请已发送，等待对方接受', id: r.id }
   })
-  app.get(API.federationChanges, async () => ({ since: 'now', events: [] }))
+  app.get(API.federationChanges, async (req, reply) => {
+    if (!requireFederation(req, reply)) return
+    return { since: 'now', events: [] }
+  })
   app.post<{ Body: { relation_id: string; body: string } }>(API.federationMessage, async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
+    if (!requireFederation(req, reply)) return
     const relationId = req.body?.relation_id
     const text = req.body?.body
     if (typeof relationId !== 'string' || typeof text !== 'string') {
@@ -393,6 +433,54 @@ export async function registerRoutes(
   app.get(API.adminPlugins, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     return repo.getPlugins()
+  })
+
+  /* ---- 插件库一键安全扫描（后台任务 + 进度轮询） ---- */
+  app.get('/admin/scan/status', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return runtime.scanProgress ?? { running: false, total: repo.getPlugins().length, done: 0, current: null, failed: 0, risk: 0, started_at: null, finished_at: null }
+  })
+  app.post('/admin/scan', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const cur = runtime.scanProgress
+    if (cur?.running) return { ...cur, message: '扫描进行中，请稍候' }
+    const plugins = repo.getPlugins()
+    if (plugins.length === 0) {
+      return reply.code(400).send({ error: 'empty', message: '插件库为空，无可扫描目标（请先配置 GITHUB_TOKENS 完成同步）' })
+    }
+    runtime.scanProgress = { running: true, total: plugins.length, done: 0, current: null, failed: 0, risk: 0, started_at: new Date().toISOString(), finished_at: null }
+    repo.log('admin', 'scan.all', { total: plugins.length })
+    void (async () => {
+      let done = 0
+      let failed = 0
+      let risk = 0
+      const queue = [...plugins]
+      // 双并发：unpkg/OSV 网络扫描，避免压垮上游
+      const worker = async (): Promise<void> => {
+        while (queue.length) {
+          const p = queue.shift()
+          if (!p) return
+          if (runtime.scanProgress) runtime.scanProgress.current = p.id
+          try {
+            const profile = await scanPlugin({ pkg: p.id, version: p.version, repo: p.repo })
+            repo.setPluginSecurity(p.id, profile)
+            if (profile.risk_tags.length > 0) risk++
+          } catch {
+            failed++
+          }
+          done++
+          if (runtime.scanProgress) {
+            runtime.scanProgress.done = done
+            runtime.scanProgress.failed = failed
+            runtime.scanProgress.risk = risk
+          }
+        }
+      }
+      await Promise.all([worker(), worker()])
+      runtime.scanProgress = { running: false, total: plugins.length, done, current: null, failed, risk, started_at: runtime.scanProgress?.started_at ?? null, finished_at: new Date().toISOString() }
+      repo.log('admin', 'scan.all.done', { done, failed, risk })
+    })()
+    return runtime.scanProgress
   })
 
   app.get(API.adminCombos, async (req, reply) => {
@@ -491,21 +579,26 @@ export async function registerRoutes(
   })
   app.put<{ Body: Partial<ServerConfig> }>(API.adminConfig, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
+    const prevTokens = [...(repo.getConfig().sync.github_tokens ?? [])].map((t) => String(t).trim()).filter(Boolean)
     const next = { ...repo.getConfig(), ...(req.body ?? {}) } as ServerConfig
     // 适配：token 池去空去重；注册方式白名单（当前仅 github）；管理员口令不可置空（回落环境变量防锁死）
     next.sync.github_tokens = [...new Set((next.sync.github_tokens ?? []).map((t) => String(t).trim()).filter(Boolean))]
     if (!next.user.registration_methods?.length) next.user.registration_methods = ['github']
     next.user.registration_methods = next.user.registration_methods.filter((m) => m === 'github')
     if (!next.admin.password) next.admin.password = process.env.ADMIN_TOKEN ?? ''
+    // 源连接密码与联邦密码：允许显式清空（清空 = 关闭对应校验）；类型不规范时回落为空。
+    next.server.access_password = typeof next.server.access_password === 'string' ? next.server.access_password : ''
+    next.federation.secret = typeof next.federation.secret === 'string' ? next.federation.secret : ''
+    next.federation.enabled = next.federation.enabled !== false
     repo.setConfig(next)
     // 密钥即时热更新：同步 token 池、OAuth/JWT、管理端口令全部生效
-    const wasSyncEnabled = sync.enabled
     sync.setTokens(next.sync.github_tokens)
+    sync.setMaxRepos(next.sync.max_repos)
     auth.configure({ clientId: next.auth.github_client_id, clientSecret: next.auth.github_client_secret, jwtSecret: next.auth.jwt_secret })
-    // 首次配置 token（从未启用 → 启用）：立即触发一次同步，无需重启
-    if (!wasSyncEnabled && sync.enabled) {
-      void sync.runSync(repo.syncTarget()).then(() => repo.persistSync())
-    }
+    // 搜索 token 发生变化：仅重置下一次定时同步的倒计时，不立即执行；
+    // 从"未启用 → 启用"同样等满一个完整间隔后才执行首次 GitHub 收录扫描。
+    const tokensChanged = prevTokens.join(',') !== next.sync.github_tokens.join(',')
+    if (tokensChanged) resetSyncSchedule()
     repo.log('admin', 'config.update', {})
     return repo.getConfig()
   })
@@ -532,7 +625,40 @@ export async function registerRoutes(
 
   app.get(API.adminFederation, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return { relations: repo.getFedRelations(), messages: repo.getFedMessages() }
+    const fed = repo.getConfig().federation
+    return {
+      relations: repo.getFedRelations(),
+      messages: repo.getFedMessages(),
+      config: { enabled: fed.enabled, secret_configured: !!fed.secret },
+    }
+  })
+  // 管理端「发送邀请」：本服务器代表管理员向对方服务器发起握手（携带对方联邦密码），
+  // 由对方 handshake 接口校验；浏览器不跨域直接调对方，避免 CORS 与密钥暴露面。
+  app.post<{ Body: { peer_url: string; secret: string; mode?: 'snapshot' | 'realtime' } }>('/admin/federation/invite', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const peerUrl = req.body?.peer_url?.trim()
+    const secret = req.body?.secret
+    if (!peerUrl) return reply.code(400).send({ error: 'bad_request', message: '对方服务器地址必填' })
+    if (typeof secret !== 'string' || !secret) return reply.code(400).send({ error: 'bad_request', message: '对方联邦密码必填' })
+    // 本机对外地址：OAuth 场景同样依赖反代/域名的显式配置，优先 OAUTH_CALLBACK_URL。
+    const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
+    const peer = peerUrl.replace(/\/+$/, '')
+    try {
+      const res = await fetch(`${peer}/api/v1/federation/handshake`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Federation-Secret': secret, 'User-Agent': 'dsh-store-server' },
+        body: JSON.stringify({ from_url: self, mode: req.body?.mode ?? 'snapshot' }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string } | null
+        return reply.code(res.status === 401 ? 401 : 502).send({ error: 'peer_rejected', message: body?.message ?? `对方拒绝邀请（HTTP ${res.status}）` })
+      }
+    } catch {
+      return reply.code(502).send({ error: 'peer_unreachable', message: '无法访问对方服务器：请确认地址可公网访问、且对方已开启联邦并配置联邦密码' })
+    }
+    const r = repo.addFedRelation({ peer_url: peer, mode: req.body?.mode ?? 'snapshot' })
+    repo.log('admin', 'federation.invite', { peer })
+    return { ok: true, message: '邀请已发送，等待对方管理员接受', id: r.id }
   })
   app.post<{ Body: { id: string; action: 'accept' | 'reject' | 'disconnect' } }>(API.adminFederation, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
@@ -589,16 +715,16 @@ export async function registerRoutes(
   })
   app.get('/admin/sync', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return sync.status
+    return { ...sync.status, progress: sync.progress }
   })
   app.post('/admin/sync', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     if (!sync.enabled) {
       return reply.code(503).send({ error: 'not_configured', message: '未配置 GITHUB_TOKENS' })
     }
-    const result = await sync.runSync(repo.syncTarget())
-    await repo.persistSync()
-    return { ...result, status: sync.status }
+    const run = sync.startRun(repo.syncTarget())
+    void run.done.then(() => repo.persistSync()).catch(() => {})
+    return { started: run.started, status: sync.status, progress: run.progress }
   })
   app.post<{ Body: { version: string } }>(API.adminUpdate, async (req, reply) => {
     if (!requireAdmin(req, reply)) return

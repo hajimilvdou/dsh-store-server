@@ -12,6 +12,7 @@ export const CONFIG_KEYS = {
   combos_refresh_min: 'sync.combos_refresh_min',
   snapshot_retention_days: 'trending.snapshot_retention_days',
   readme_fetch_kb: 'sync.readme_fetch_kb',
+  max_repos: 'sync.max_repos',
   github_tokens: 'sync.github_tokens',
 
   /* 趋势榜 */
@@ -99,6 +100,8 @@ export interface ServerConfig {
     data_heartbeat_min: number
     combos_refresh_min: number
     readme_fetch_kb: number
+    /** GitHub 搜索收录上限：0 = 服务器默认全量；>0 = 测试限量（如 100）。 */
+    max_repos: number
     auto_on_new_source: boolean
     /** GitHub 搜索 token 池（classic PAT，多枚轮换）。配置中心可填；留空回落环境变量 GITHUB_TOKENS。 */
     github_tokens: string[]
@@ -224,6 +227,7 @@ export const DEFAULT_CONFIG: ServerConfig = {
     data_heartbeat_min: 30,
     combos_refresh_min: 30,
     readme_fetch_kb: 32,
+    max_repos: 0,
     auto_on_new_source: false,
     github_tokens: [],
   },

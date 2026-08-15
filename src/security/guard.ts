@@ -29,6 +29,18 @@ export class AlertService {
   }
 }
 
+/** 插件库一键安全扫描进度（管理端轮询展示）。 */
+export interface ScanProgress {
+  running: boolean
+  total: number
+  done: number
+  current: string | null
+  failed: number
+  risk: number
+  started_at: string | null
+  finished_at: string | null
+}
+
 /** 运行时状态（守卫计数 + 时钟漂移 + 更新检测，供安全监控页/健康接口展示）。 */
 export interface RuntimeState {
   clockDriftMs: number
@@ -41,6 +53,8 @@ export interface RuntimeState {
   latestRelease: { tag: string | null; name: string | null; published_at: string | null; body: string | null } | null
   /** 跟踪通道 = commit 时的最新提交检测结果。 */
   latestCommit: { sha: string; message: string | null; at: string | null } | null
+  /** 插件库一键安全扫描进度。 */
+  scanProgress: ScanProgress | null
 }
 
 /**

@@ -18,6 +18,23 @@ export interface SyncStatus {
   last_error: string | null
 }
 
+export type SyncStage = 'idle' | 'searching' | 'extracting' | 'trending' | 'done' | 'error'
+
+/** 实时抓取进度：管理端横幅轮询展示。 */
+export interface SyncProgress {
+  running: boolean
+  stage: SyncStage
+  /** 人话阶段描述（搜索关键词 / 正在提取哪个仓库）。 */
+  phase: string
+  total: number
+  done: number
+  current: string | null
+  changed: number
+  started_at: string | null
+  finished_at: string | null
+  message: string | null
+}
+
 interface GhRepo {
   id: number
   full_name: string
@@ -48,11 +65,24 @@ export interface ReleaseInfo {
 export class GithubSync {
   enabled: boolean
   readonly topic: string
-  readonly maxRepos: number
+  maxRepos: number
   status: SyncStatus
+  progress: SyncProgress = {
+    running: false,
+    stage: 'idle',
+    phase: '待命',
+    total: 0,
+    done: 0,
+    current: null,
+    changed: 0,
+    started_at: null,
+    finished_at: null,
+    message: null,
+  }
   private tokens: string[]
   private tokenIndex = 0
   private lastGhError: string | null = null
+  private running: Promise<{ changed: number }> | null = null
 
   /** 星数区间拆分：单查询被 GitHub 1000 条硬上限截断时，逐段查询保证搜全。 */
   private static readonly STAR_SLICES = [
@@ -96,6 +126,44 @@ export class GithubSync {
     this.status.enabled = this.enabled
     this.status.tokens = this.tokens.length
     if (!this.enabled) this.status.last_result = '未配置 GitHub 搜索 token（配置中心可填写）'
+  }
+
+  /** 配置中心热更新抓取上限：0 = 服务器默认全量；>0 = 测试限量（如 100）。 */
+  setMaxRepos(n: number): void {
+    this.maxRepos = Math.max(0, Math.trunc(Number(n) || 0))
+  }
+
+  isRunning(): boolean {
+    return this.progress.running || this.running !== null
+  }
+
+  private updateProgress(patch: Partial<SyncProgress>): void {
+    this.progress = { ...this.progress, ...patch }
+  }
+
+  /**
+   * 手动触发后台抓取（管理端按钮）：立即返回进度，任务在后台完成；
+   * 已在运行时重复点击直接返回当前进度，不会并发拉取。
+   */
+  startRun(target: SyncTarget): { started: boolean; progress: SyncProgress; done: Promise<{ changed: number }> } {
+    if (this.isRunning()) return { started: false, progress: this.progress, done: this.running ?? Promise.resolve({ changed: 0 }) }
+    this.progress = {
+      running: true,
+      stage: 'searching',
+      phase: '正在搜索 GitHub 插件仓库…',
+      total: 0,
+      done: 0,
+      current: null,
+      changed: 0,
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      message: null,
+    }
+    const done = this.runSync(target).finally(() => {
+      this.running = null
+    })
+    this.running = done
+    return { started: true, progress: this.progress, done }
   }
 
   private gh(path: string, init?: RequestInit): Promise<Response | null> {
@@ -158,6 +226,10 @@ export class GithubSync {
           merged.push(r)
         }
       }
+      this.updateProgress({
+        phase: `正在搜索 GitHub…已发现 ${merged.length} 个仓库${this.maxRepos > 0 ? `（测试上限 ${this.maxRepos}）` : ''}`,
+        total: merged.length,
+      })
     }
 
     if (this.maxRepos > 0) {
@@ -291,7 +363,24 @@ export class GithubSync {
   async runSync(target: SyncTarget): Promise<{ changed: number }> {
     if (!this.enabled) {
       this.status.last_result = '未配置 GITHUB_TOKENS'
+      this.updateProgress({ running: false, stage: 'error', phase: '未配置 GitHub 搜索 token', finished_at: new Date().toISOString(), message: '未配置 GITHUB_TOKENS' })
       return { changed: 0 }
+    }
+    if (!this.progress.running) {
+      this.progress = {
+        running: true,
+        stage: 'searching',
+        phase: '正在搜索 GitHub 插件仓库…',
+        total: 0,
+        done: 0,
+        current: null,
+        changed: 0,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        message: null,
+      }
+    } else {
+      this.updateProgress({ stage: 'searching', phase: '正在搜索 GitHub 插件仓库…' })
     }
     const repos = await this.searchRepos()
     if (this.lastGhError) {
@@ -299,9 +388,11 @@ export class GithubSync {
         ? 'GitHub 认证失败：token 无效或已撤销（请重新生成 classic PAT）'
         : `GitHub 访问失败：${this.lastGhError}`
       this.status = { ...this.status, last_run_at: new Date().toISOString(), last_result: message, last_searched: 0, last_error: this.lastGhError }
+      this.updateProgress({ running: false, stage: 'error', phase: message, finished_at: new Date().toISOString(), message: this.lastGhError })
       target.log('sync', 'github.sync.error', { error: this.lastGhError })
       return { changed: 0 }
     }
+    this.updateProgress({ stage: 'extracting', phase: `搜索完成，共 ${repos.length} 个仓库，开始提取插件信息…`, total: repos.length, done: 0 })
     const today = new Date().toISOString().slice(0, 10)
     const prevByRepo = new Map<string, number>()
     for (const s of target.starSnapshots) {
@@ -309,13 +400,23 @@ export class GithubSync {
     }
     let changed = 0
 
+    let processed = 0
     for (const repo of repos) {
+      processed++
+      this.updateProgress({
+        stage: 'extracting',
+        phase: `正在提取插件信息 ${processed}/${repos.length}`,
+        done: processed,
+        current: repo.full_name,
+        changed,
+      })
       const existing = target.plugins.find((p) => p.repo === repo.full_name)
       const plugin = existing ?? (await this.extractPlugin(repo.full_name))
       if (!plugin) continue
       if (!existing) {
         target.plugins.push(plugin)
         changed++
+        this.updateProgress({ changed })
       } else {
         existing.stars = repo.stargazers_count
         existing.repo_url = repo.html_url
@@ -327,6 +428,7 @@ export class GithubSync {
     }
 
     // 趋势榜重算：日增 = 今日 − 前一快照；新收录首日不参与排行
+    this.updateProgress({ stage: 'trending', phase: '正在重算星数日增与趋势榜…', done: repos.length, current: null, changed })
     const todayStars = new Map(target.starSnapshots.filter((s) => s.date === today).map((s) => [s.repo, s.stars]))
     for (const p of target.plugins) {
       const todayS = todayStars.get(p.repo)
@@ -347,7 +449,19 @@ export class GithubSync {
     ranked.forEach((p, i) => (p.trending_rank = i + 1))
 
     if (changed > 0) target.bumpPluginsRevision()
-    this.status = { ...this.status, last_run_at: new Date().toISOString(), last_result: `成功 · 搜索 ${repos.length} 仓库 · ${changed} 变更`, last_changed: changed, last_searched: repos.length, last_error: null }
+    const finishedAt = new Date().toISOString()
+    this.status = { ...this.status, last_run_at: finishedAt, last_result: `成功 · 搜索 ${repos.length} 仓库 · ${changed} 变更`, last_changed: changed, last_searched: repos.length, last_error: null }
+    this.updateProgress({
+      running: false,
+      stage: 'done',
+      phase: `同步完成：搜索 ${repos.length} 个仓库，${changed} 个变更`,
+      done: repos.length,
+      total: repos.length,
+      current: null,
+      changed,
+      finished_at: finishedAt,
+      message: null,
+    })
     target.log('sync', 'github.sync', { searched: repos.length, changed })
     return { changed }
   }

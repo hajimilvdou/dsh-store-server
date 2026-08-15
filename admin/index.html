@@ -110,6 +110,7 @@ tr:hover td{background:var(--hover)}
   </nav>
   <main class="a-main" id="main">
     <div id="updateBanner" class="update-banner" style="display:none"></div>
+    <div id="syncBanner" class="update-banner" style="display:none"></div>
     <div id="mainContent">加载中…</div>
   </main>
 </div>
@@ -207,10 +208,15 @@ function page(p) {
     main.innerHTML = `<div class="a-card"><h4>加载失败</h4><div class="msg" style="color:var(--danger)">${esc(e.message)}</div></div>`
   })
   checkUpdateBanner()
+  checkSyncBanner()
 }
 
-/* 服务端版本横幅：按跟踪通道（release/commit）显示检测结果 → 顶部横幅 + 一键跳转更新页 */
+/* 服务端版本横幅：按跟踪通道（release/commit）显示检测结果 → 顶部横幅 + 一键跳转更新页 + 忽略 */
 const vtag = (t) => (t && !String(t).startsWith('v') ? 'v' + t : t)
+function ignoreUpdate(v) {
+  localStorage.setItem('dshs_ignored_update', v)
+  checkUpdateBanner()
+}
 function checkUpdateBanner() {
   const el = document.getElementById('updateBanner')
   if (!el || !adminToken) return
@@ -219,15 +225,75 @@ function checkUpdateBanner() {
     const latest = isCommit
       ? (st.latest_commit ? st.latest_commit.sha.slice(0, 7) : null)
       : (st.latest_release && st.latest_release.tag ? vtag(st.latest_release.tag) : null)
-    if (latest && st.current_version && latest !== st.current_version) {
+    const ignored = localStorage.getItem('dshs_ignored_update')
+    if (latest && st.current_version && latest !== st.current_version && ignored !== latest) {
       el.style.display = 'flex'
-      el.innerHTML = isCommit
-        ? `🆕 服务端有新提交 <b>${esc(latest)}</b>（当前部署 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
-        : `🆕 服务端有新版本 <b>${esc(latest)}</b>（当前运行 ${esc(st.current_version)}）<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>`
+      el.innerHTML = (isCommit
+        ? `🆕 服务端有新提交 <b>${esc(latest)}</b>（当前部署 ${esc(st.current_version)}）`
+        : `🆕 服务端有新版本 <b>${esc(latest)}</b>（当前运行 ${esc(st.current_version)}）`) +
+        `<button class="abtn pri" onclick="page('upd')">⚡ 一键更新</button>` +
+        `<button class="abtn" style="margin-left:auto" onclick="ignoreUpdate('${esc(latest)}')">忽略</button>`
     } else {
       el.style.display = 'none'
     }
   }).catch(() => {})
+}
+
+/* GitHub 抓取实时进度横幅：手动点击开始后轮询 /admin/sync，任何页面顶部都能看到 */
+let syncTimer = null
+function renderSyncBanner(st) {
+  const el = document.getElementById('syncBanner')
+  if (!el) return
+  const p = st.progress || {}
+  if (!p.stage || p.stage === 'idle') {
+    el.style.display = 'none'
+    return
+  }
+  const pct = p.total > 0 ? Math.max(0, Math.min(100, Math.round((p.done / p.total) * 100))) : (p.stage === 'searching' ? 0 : 100)
+  const stageText = p.stage === 'searching' ? '搜索阶段'
+    : p.stage === 'extracting' ? '提取阶段'
+    : p.stage === 'trending' ? '趋势榜重算'
+    : p.stage === 'error' ? '抓取失败'
+    : '抓取完成'
+  el.style.display = 'flex'
+  el.innerHTML = `🔎 GitHub 插件抓取 ${p.running ? '进行中' : '已结束'} · ${esc(stageText)} · ${esc(p.phase || '')}${p.current ? ' · ' + esc(p.current) : ''}` +
+    `<span style="flex:1;height:6px;background:var(--bg3);border-radius:3px;margin:0 10px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--brand1),var(--brand2));transition:width .4s"></span></span>` +
+    `<span style="white-space:nowrap;color:var(--gold)"><b>${pct}%</b> · ${p.done}/${p.total || '?'}</span>`
+  if (!p.running) setTimeout(() => { el.style.display = 'none' }, 6000)
+}
+function checkSyncBanner() {
+  if (!adminToken) return
+  api('/admin/sync').then((st) => {
+    renderSyncBanner(st)
+    if (st.progress && st.progress.running) pollSyncBanner()
+  }).catch(() => {})
+}
+function pollSyncBanner() {
+  clearInterval(syncTimer)
+  syncTimer = setInterval(async () => {
+    try {
+      const st = await api('/admin/sync')
+      renderSyncBanner(st)
+      if (!(st.progress && st.progress.running)) {
+        clearInterval(syncTimer)
+        // 抓取结束后刷新数据页（仅仪表盘 / 插件库，不打断其他页面）
+        if (st.progress && st.progress.done > 0 && (currentPage === 'dash' || currentPage === 'plugins')) page(currentPage)
+      }
+    } catch { /* 页面切换后忽略 */ }
+  }, 1500)
+}
+function startSyncNow() {
+  post('/admin/sync', {}).then((st) => {
+    renderSyncBanner(st)
+    if (st.progress && st.progress.running) pollSyncBanner()
+  }).catch((e) => {
+    const el = document.getElementById('syncBanner')
+    if (el) {
+      el.style.display = 'flex'
+      el.innerHTML = '🔎 GitHub 抓取启动失败：' + esc(e.message)
+      setTimeout(() => { el.style.display = 'none' }, 6000)
+    }
+  })
 }
 
 /* ============ 页面渲染 ============ */
@@ -249,7 +315,7 @@ RENDER.dash = async () => {
   </div>
   <div class="a-card"><h4>同步状态</h4><table>
     <tr><th>任务</th><th>状态</th><th>结果</th></tr>
-    <tr><td>GitHub 增量同步（topic:dsh-plugin）</td><td>${sync.enabled ? '<span class="pill ok">已启用（token ×' + sync.tokens + '）</span>' : '<span class="pill wa">未配置 GITHUB_TOKENS</span>'}</td><td>${esc(sync.last_result || '—')}</td></tr>
+    <tr><td>GitHub 增量同步（topic:dsh-plugin）</td><td>${sync.enabled ? '<span class="pill ok">已启用（token ×' + sync.tokens + '）</span>' : '<span class="pill wa">未配置 GITHUB_TOKENS</span>'}</td><td>${esc(sync.last_result || '—')} <button class="abtn pri" onclick="startSyncNow()">▶ 立即抓取</button></td></tr>
     <tr><td>⭐ 星数快照 / 趋势榜重算</td><td><span class="pill ok">随同步任务</span></td><td>${esc(sync.last_run_at || '—')}</td></tr>
   </table>
   <div class="msgbox" id="syncMsg" style="display:none"></div></div>
@@ -316,6 +382,10 @@ RENDER.sec = async () => {
 
 RENDER.fed = async () => {
   const fed = await api('/admin/federation')
+  const local = fed.config || {}
+  const localState = local.enabled
+    ? (local.secret_configured ? '<span class="pill ok">已开启 · 联邦密码已设置</span>' : '<span class="pill wa">已开启 · 联邦密码未设置</span>')
+    : '<span class="pill wa">未开启</span>'
   const rows = fed.relations.map((r) => `<tr>
     <td><b>${esc(r.peer_url)}</b></td>
     <td>${r.status === 'connected' ? '<span class="pill ok">已连接</span>' : r.status === 'pending' ? '<span class="pill wa">待接受</span>' : r.status === 'rejected' ? '<span class="pill ba">已拒绝</span>' : '<span class="pill wa">已断联</span>'}</td>
@@ -327,7 +397,7 @@ RENDER.fed = async () => {
   return `<div class="a-title">🌐 联邦互联 <small>（发起方主动邀请，接收方审核接受）</small></div>
   <div class="a-card"><h4>＋ 发起联邦邀请</h4>
     <div class="frow"><input id="fedUrl" placeholder="对方服务器地址，如 https://store-friend.com"><input id="fedSecret" placeholder="对方联邦密码" style="max-width:220px"><button class="abtn pri" style="flex:none" onclick="fedHandshake()">发送邀请</button></div>
-    <div class="msg">联邦密码 ≠ 用户访问密码，两者独立。密码错误时邀请无法生成有效签名，对方无感知（防探测）。</div>
+    <div class="msg">本机状态：${localState} · 邀请由本服务器转发到对方 handshake 接口并携带「对方」联邦密码校验；本机联邦密码请在配置中心「🔗 服务器源与联邦」设置。</div>
     <div class="msgbox" id="fedMsg" style="display:none"></div></div>
   <div class="a-card"><h4>联邦关系</h4><table>
     <tr><th>对方服务器</th><th>状态</th><th>共享内容</th><th>模式</th><th>RTT</th><th>操作</th></tr>
@@ -403,14 +473,18 @@ RENDER.plugins = async () => {
     const n = i + 1
     return `<button class="abtn" style="${n === pluginPage ? 'border-color:var(--brand2);color:var(--brand2)' : ''}" onclick="pluginPage=${n};page('plugins')">${n}</button>`
   }).join('')
+  // 进入页面时若后台扫描进行中 → 恢复进度横幅并继续轮询
+  api('/admin/scan/status').then((st) => { renderScanBanner(st); if (st.running) pollScan() }).catch(() => {})
   return `<div class="a-title">📦 插件库 <small>（事件驱动安全扫描 · 人工覆盖永不被同步覆盖）</small></div>
+  <div id="scanBanner" class="update-banner" style="display:none"></div>
   <div class="a-card">
     <div class="frow">
       <input id="pluginSearch" placeholder="搜索插件名 / 作者 / 仓库 / 安装地址 / 简介…" value="${esc(pluginQuery)}">
       <button class="abtn pri" style="flex:none" onclick="pluginQuery=document.getElementById('pluginSearch').value.trim();pluginPage=1;page('plugins')">搜索</button>
       <button class="abtn" style="flex:none" onclick="pluginQuery='';pluginPage=1;page('plugins')">重置</button>
+      <button class="abtn pri" style="flex:none" onclick="startScanAll()">🛡 一键扫描</button>
     </div>
-    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${total}</b> 个插件 · 第 ${pluginPage}/${pages} 页（每页 ${PLUGIN_PAGE_SIZE} 条）</div>
+    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${total}</b> 个插件 · 第 ${pluginPage}/${pages} 页（每页 ${PLUGIN_PAGE_SIZE} 条）· 一键扫描 = 对全部在架插件执行 L0~L2 安全扫描并回写安全分/风险标签</div>
     <table>
       <tr><th>插件</th><th>作者</th><th>来源</th><th>⭐</th><th>📈日增</th><th>质量分</th><th>安全</th><th>状态</th><th>操作</th></tr>
       ${rows || '<tr><td colspan="9" style="color:var(--tx2)">无匹配插件</td></tr>'}
@@ -483,6 +557,7 @@ RENDER.cfg = async () => {
   const num = (label, path, val) => `<div class="ci"><span class="lab">${label}</span><input data-path="${path}" data-kind="number" value="${esc(String(val))}">${sv()}</div>`
   const text = (label, path, val, ph = '', wide = false) => `<div class="ci${wide ? ' wide' : ''}"><span class="lab">${label}</span><input class="${wide ? 'wide' : ''}" data-path="${path}" value="${esc(String(val))}" placeholder="${ph}">${sv()}</div>`
   const pass = (label, path, ph) => `<div class="ci wide"><span class="lab">${label}</span><input class="wide" type="password" data-path="${path}" data-kind="password" placeholder="${ph}">${sv()}</div>`
+  const passOpt = (label, path, ph) => `<div class="ci wide"><span class="lab">${label}</span><input class="wide" type="password" data-path="${path}" data-kind="password-optional" placeholder="${ph}">${sv()}</div>`
   const sel = (label, path, cur, opts) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}">${opts.map(([v, t]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
   const bool = (label, path, cur) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}" data-kind="bool">${[['1', '开'], ['0', '关']].map(([v, t]) => `<option value="${v}" ${(cur ? '1' : '0') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
   const tokens = cfg.sync.github_tokens || []
@@ -501,6 +576,13 @@ RENDER.cfg = async () => {
     <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">改密后旧密码立即失效，请用新密码重新进入；生产环境未设置时管理端不可用</span></div>
   </div></div>
 
+  <div class="a-card"><h4>🔗 服务器源与联邦</h4><div class="cfg">
+    ${passOpt('源服务器连接密码', 'server.access_password', '留空 = 客户端连接本源无需密码（回落环境变量 ACCESS_PASSWORD）')}
+    ${passOpt('联邦密码', 'federation.secret', '留空 = 未配置，服务器间联邦不可用（回落环境变量 FEDERATION_SECRET）')}
+    ${bool('联邦（服务器间）', 'federation.enabled', cfg.federation.enabled)}
+    <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">源连接密码用于客户端加源；联邦密码用于服务器间握手，两者独立。清空输入并保存 = 关闭对应校验</span></div>
+  </div></div>
+
   <div class="a-card"><h4>👥 账号与注册</h4><div class="cfg">
     ${bool('开放注册', 'user.registration_enabled', cfg.user.registration_enabled)}
     <div class="ci"><span class="lab">可用注册方式</span>
@@ -515,6 +597,7 @@ RENDER.cfg = async () => {
     ${num('插件数据心跳（分钟）', 'sync.data_heartbeat_min', cfg.sync.data_heartbeat_min)}
     ${num('组数据刷新（分钟）', 'sync.combos_refresh_min', cfg.sync.combos_refresh_min)}
     ${num('README 抓取上限（KB）', 'sync.readme_fetch_kb', cfg.sync.readme_fetch_kb)}
+    ${num('搜索收录上限（0=服务器默认全量）', 'sync.max_repos', cfg.sync.max_repos)}
   </div></div>
 
   <div class="a-card"><h4>🏆 榜单与排序</h4><div class="cfg">
@@ -539,7 +622,6 @@ RENDER.cfg = async () => {
     ${bool('点赞', 'feature.likes', f.likes)}
     ${bool('组合', 'feature.combos', f.combos)}
     ${bool('公告', 'feature.announcements', f.announcements)}
-    ${bool('联邦（服务器间）', 'federation.enabled', cfg.federation.enabled)}
   </div></div>
 
   <div class="a-card"><h4>🛡 安全与风控</h4><div class="cfg">
@@ -580,7 +662,14 @@ function flash(id, text, ok = true) {
 async function act(fn, msgId, successText) {
   try { await fn(); flash(msgId, successText) } catch (e) { flash(msgId, e.message, false) }
 }
-const fedHandshake = () => act(async () => { await post('/api/v1/federation/handshake', { from_url: document.getElementById('fedUrl').value, mode: 'snapshot' }); page('fed') }, 'fedMsg', '邀请已发送，等待对方接受')
+const fedHandshake = () => act(async () => {
+  await post('/admin/federation/invite', {
+    peer_url: document.getElementById('fedUrl').value.trim(),
+    secret: document.getElementById('fedSecret').value.trim(),
+    mode: 'snapshot',
+  })
+  page('fed')
+}, 'fedMsg', '邀请已发送，等待对方管理员接受')
 const fedAction = (id, action) => act(async () => { await post('/admin/federation', { id, action }); page('fed') }, 'fedMsg', '操作成功')
 const saveRepoUrl = () => act(async () => { const cfg = await api('/admin/config'); cfg.update.repo_url = document.getElementById('repoUrl').value; await put('/admin/config', cfg); page('upd') }, 'updLog', '检测源已保存')
 const checkUpdateNow = async () => {
@@ -608,6 +697,43 @@ const reportFastTrack = (id, url) => act(async () => { await post('/admin/fast-t
 const reportResolve = (id, status) => act(async () => { await post('/admin/reports', { id, status }); page('reports') }, null, '')
 const publishAnno = () => act(async () => { await post('/admin/announcements', { version: document.getElementById('annVer').value, level: document.getElementById('annLv').value, content: document.getElementById('annContent').value }); page('anno') }, 'annMsg', '公告已发布，客户端下次心跳点亮叹号')
 const delAnno = (id) => act(async () => { await del(`/admin/announcements/${id}`); page('anno') }, null, '')
+
+/* ============ 插件库一键安全扫描（后台任务 + 进度横幅轮询） ============ */
+let scanTimer = null
+function renderScanBanner(st) {
+  const el = document.getElementById('scanBanner')
+  if (!el) return
+  const pct = st.total ? Math.round((st.done / st.total) * 100) : 0
+  el.style.display = 'flex'
+  el.innerHTML = `🛡 安全扫描 ${st.running ? '进行中' : '已完成'}：${st.done}/${st.total}（失败 ${st.failed} · 发现风险 ${st.risk}）${st.current ? ' · 正在扫描 ' + esc(st.current) : ''}` +
+    `<span style="flex:1;height:6px;background:var(--bg3);border-radius:3px;margin:0 10px;overflow:hidden"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,var(--brand1),var(--brand2));transition:width .4s"></span></span>` +
+    `<span style="white-space:nowrap;color:var(--gold)"><b>${pct}%</b></span>`
+  if (!st.running) setTimeout(() => { el.style.display = 'none' }, 6000)
+}
+function startScanAll() {
+  post('/admin/scan', {}).then((st) => {
+    renderScanBanner(st)
+    if (st.running) pollScan()
+    else if (st.message) renderScanBanner(st)
+  }).catch((e) => {
+    const el = document.getElementById('scanBanner')
+    if (el) { el.style.display = 'flex'; el.innerHTML = '🛡 扫描启动失败：' + esc(e.message) }
+  })
+}
+function pollScan() {
+  clearInterval(scanTimer)
+  scanTimer = setInterval(async () => {
+    try {
+      const st = await api('/admin/scan/status')
+      renderScanBanner(st)
+      if (!st.running) {
+        clearInterval(scanTimer)
+        // 仅当仍停留在插件库页时刷新列表（避免把用户从其他页面拽回来）
+        if (st.done > 0 && document.getElementById('scanBanner')) page('plugins')
+      }
+    } catch { /* 页面切换后忽略 */ }
+  }, 2000)
+}
 function setPath(obj, path, val) {
   const parts = path.split('.')
   let cur = obj
@@ -623,6 +749,7 @@ function fieldValue(el) {
     if (!el.value.trim()) throw new Error('密码不能为空：输入新值后再保存')
     return el.value
   }
+  if (kind === 'password-optional') return el.value
   if (kind === 'tokens') return el.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
   if (kind === 'bool') return el.value === '1'
   if (kind === 'number') {
