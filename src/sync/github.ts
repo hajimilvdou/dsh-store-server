@@ -305,18 +305,26 @@ export class GithubSync {
     const repo = (await res.json().catch(() => null)) as GhRepo | null
     if (!repo) return null
     const repoShort = fullName.split('/')[1]
-    // 安装地址（DSH 插件规范）：仓库 package.json 的 name 即 npm 包名；
-    // 未发布到 npm 时用 git spec（dsh plugin add github:owner/repo）。
+    // 识别规则（dsh_install_types）：package.json 含 dsh 字段 → Plugin；
+    // preset/<name>/agent.cordis.yml 存在 → Preset；两者都有 = 双形态，按 Plugin 收录并携带 preset_name。
     const pkg = await this.fetchPackageJson(fullName)
-    const npm = await this.lookupNpm(pkg?.name ?? null)
-    const id = pkg?.name ?? repoShort
-    const install = npm ? id : `github:${fullName}`
+    const presets = await this.detectPresets(fullName)
+    const pluginCandidate = !!pkg?.name && (!!pkg.dsh || presets.length === 0)
+    const kind: Plugin['kind'] = pluginCandidate ? 'plugin' : 'preset'
+    const presetName = presets[0]
+    // 安装地址：Plugin = npm 包名或 git spec；Preset = 复制到 .agent-presets/<preset_name>。
+    const npm = kind === 'plugin' ? await this.lookupNpm(pkg?.name ?? null) : null
+    const id = pkg?.name ?? (kind === 'preset' && presetName ? presetName : repoShort)
+    const install = kind === 'preset' ? `preset:${presetName ?? repoShort}` : npm ? id : `github:${fullName}`
     const version = npm?.latest ?? pkg?.version ?? '1.0.0'
     const description = await this.extractDescription(fullName, repo.description)
+    const name = kind === 'preset' && presetName ? presetName : id
     return {
       id,
+      kind,
+      preset_name: presetName,
       version,
-      name: id,
+      name,
       description,
       repo: fullName,
       repo_url: repo.html_url,
@@ -329,7 +337,7 @@ export class GithubSync {
       downloads_7d: 0,
       quality_score: this.qualityScore(repo, description),
       tags: [],
-      compat: 'dsh ≥0.1.0-rc.5',
+      compat: kind === 'preset' ? 'DSH 预设（重启后新建空白会话选择）' : 'dsh ≥0.1.0-rc.5',
       install,
       is_new: true,
       security: { level: 0, score: 100, risk_tags: [], blocked: false },
@@ -338,14 +346,29 @@ export class GithubSync {
     }
   }
 
-  /** 仓库根 package.json（name/version = 安装地址）。 */
-  private async fetchPackageJson(fullName: string): Promise<{ name?: string; version?: string } | null> {
+  /** 识别仓库内 preset/<name>/agent.cordis.yml（最多检查前 3 个目录）。 */
+  private async detectPresets(fullName: string): Promise<string[]> {
+    const res = await this.gh(`/repos/${fullName}/contents/preset`)
+    if (!res) return []
+    const data = (await res.json().catch(() => null)) as Array<{ type?: string; name?: string; path?: string }> | null
+    if (!Array.isArray(data)) return []
+    const names: string[] = []
+    for (const item of data.slice(0, 3)) {
+      if (item.type !== 'dir' || !item.name) continue
+      const check = await this.gh(`/repos/${fullName}/contents/${item.path ?? 'preset/' + item.name}/agent.cordis.yml`)
+      if (check) names.push(item.name)
+    }
+    return names
+  }
+
+  /** 仓库根 package.json（name/version/dsh 字段 = Plugin 识别依据）。 */
+  private async fetchPackageJson(fullName: string): Promise<{ name?: string; version?: string; dsh?: { bundle?: string; profile?: string } } | null> {
     try {
       const res = await fetch(`https://raw.githubusercontent.com/${fullName}/HEAD/package.json`, {
         headers: { 'User-Agent': 'dsh-store-server' },
       })
       if (!res.ok) return null
-      return (await res.json()) as { name?: string; version?: string }
+      return (await res.json()) as { name?: string; version?: string; dsh?: { bundle?: string; profile?: string } }
     } catch {
       return null
     }

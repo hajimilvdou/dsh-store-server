@@ -6,6 +6,8 @@ import type { CloudInstall, FedMessage, FedRelation, StoredReport, StoredRiskLik
 
 interface PluginRow {
   id: string
+  kind: Plugin['kind']
+  preset_name: string | null
   version: string
   name: string
   description: string
@@ -36,6 +38,8 @@ interface PluginRow {
 function rowToPlugin(r: PluginRow): Plugin {
   return {
     id: r.id,
+    kind: r.kind,
+    preset_name: r.preset_name ?? undefined,
     version: r.version,
     name: r.name,
     description: r.description,
@@ -61,7 +65,7 @@ function rowToPlugin(r: PluginRow): Plugin {
 
 function pluginToRow(p: Plugin): unknown[] {
   return [
-    p.id, p.version, p.name, p.description, p.repo, p.repo_url, p.source, p.stars, p.stars_delta_day,
+    p.id, p.kind, p.preset_name ?? null, p.version, p.name, p.description, p.repo, p.repo_url, p.source, p.stars, p.stars_delta_day,
     p.trending_rank, p.likes, p.downloads_7d, p.quality_score, JSON.stringify(p.tags), p.compat,
     // author/install 列 NOT NULL：数据缺失时用安全占位，绝不落 NULL（否则首启种子落库直接崩溃）
     p.author || '社区', p.install || '',
@@ -70,8 +74,8 @@ function pluginToRow(p: Plugin): unknown[] {
   ]
 }
 
-const PLUGIN_COLS = 'id, version, name, description, repo, repo_url, source, stars, stars_delta_day, trending_rank, likes, downloads_7d, quality_score, tags, compat, author, install, is_new, security_level, security_score, risk_tags, blocked, status, updated_at'
-const PLUGIN_PLACEHOLDERS = Array.from({ length: 24 }, (_, i) => `$${i + 1}`).join(',')
+const PLUGIN_COLS = 'id, kind, preset_name, version, name, description, repo, repo_url, source, stars, stars_delta_day, trending_rank, likes, downloads_7d, quality_score, tags, compat, author, install, is_new, security_level, security_score, risk_tags, blocked, status, updated_at'
+const PLUGIN_PLACEHOLDERS = Array.from({ length: 26 }, (_, i) => `$${i + 1}`).join(',')
 
 /**
  * PostgreSQL 仓库（v3.5 D1）：启动时从 PG 加载全量工作集到内存（数据量小），
@@ -278,6 +282,16 @@ export class PgRepo extends MemoryRepo {
     for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version) VALUES ($1,$2,$3)', [c.id, m.pkg, m.version])
     this.kvSet('combos_revision', this.combosRevision)
     return c
+  }
+
+  override removeCombo(id: string, login: string): boolean {
+    const ok = super.removeCombo(id, login)
+    if (ok) {
+      this.fire('DELETE FROM combo_members WHERE combo_id = $1', [id])
+      this.fire('DELETE FROM combos WHERE id = $1 AND author_id = $2', [id, login])
+      this.kvSet('combos_revision', this.combosRevision)
+    }
+    return ok
   }
 
   override setComboStatus(id: string, status: Combo['status']): Combo | null {

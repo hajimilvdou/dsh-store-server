@@ -53,6 +53,8 @@ export interface Repo {
   /** 安装/下载计数：匿名凭证 + 1h 窗口去重 + 按天聚合产出 downloads_7d。 */
   recordInstall(token: string, target: string): { ok: boolean; counted: boolean; downloads_7d: number }
   createCombo(input: { name: string; description: string; members: string[]; author: string; authorGithub: string }): Combo
+  /** 用户删除自己的组合（仅作者本人；返回是否删除成功）。 */
+  removeCombo(id: string, login: string): boolean
   setComboStatus(id: string, status: Combo['status']): Combo | null
   /** 注销账号（v3.6 U2）：删除账号/点赞/云端清单；组合按选择删除或匿名保留（作者显示"已注销用户"）。 */
   deactivateUser(userId: string, login: string, combos: 'delete' | 'anonymize'): { ok: boolean; deleted: { likes: number; installs: number; combos: number } }

@@ -102,6 +102,7 @@ export class MemoryRepo implements Repo {
     }
     this.plugins = RAW_PLUGINS.map(([id, description, stars, stars_delta_day, likes, source, isNew], i) => ({
       id,
+      kind: 'plugin' as const,
       version: i === 0 ? '0.4.0' : '1.0.0',
       name: id,
       description,
@@ -123,6 +124,59 @@ export class MemoryRepo implements Repo {
       status: 'listed',
       updated_at: '2026-08-14T00:00:00Z',
     }))
+    // Agent（Preset）演示数据：文件复制安装，单独页面展示
+    this.plugins.push(
+      {
+        id: 'creator-agent',
+        kind: 'preset',
+        preset_name: 'creator',
+        version: '1.0.0',
+        name: '创造模式 Agent',
+        description: '以创作者视角组织的 Agent 预设：包含创作工作流、灵感管理与发布流程。安装后重启 DSH，在新建空白会话时选择 creator 预设。',
+        repo: 'dsh-store/creator-agent',
+        repo_url: 'https://github.com/dsh-store/creator-agent',
+        author: 'liwei',
+        source: 'community',
+        stars: 1388,
+        stars_delta_day: 55,
+        trending_rank: null,
+        likes: 42,
+        downloads_7d: 331,
+        quality_score: 88,
+        tags: ['agent', 'preset'],
+        compat: 'DSH 预设（重启后新建空白会话选择）',
+        install: 'preset:creator',
+        is_new: false,
+        security: { level: 0, score: 95, risk_tags: [], blocked: false },
+        status: 'listed',
+        updated_at: '2026-08-14T00:00:00Z',
+      },
+      {
+        id: 'minimal-agent',
+        kind: 'preset',
+        preset_name: 'minimal',
+        version: '1.0.0',
+        name: '极简模式 Agent',
+        description: '只挂载最基础的模型与工具，适合快速问答和轻量任务。复制到 .agent-presets/minimal 后重启 DSH 生效。',
+        repo: 'dsh-store/minimal-agent',
+        repo_url: 'https://github.com/dsh-store/minimal-agent',
+        author: 'xiaoyu',
+        source: 'community',
+        stars: 764,
+        stars_delta_day: 28,
+        trending_rank: null,
+        likes: 19,
+        downloads_7d: 208,
+        quality_score: 82,
+        tags: ['agent', 'preset'],
+        compat: 'DSH 预设（重启后新建空白会话选择）',
+        install: 'preset:minimal',
+        is_new: false,
+        security: { level: 0, score: 96, risk_tags: [], blocked: false },
+        status: 'listed',
+        updated_at: '2026-08-14T00:00:00Z',
+      },
+    )
 
     this.combos = RAW_COMBOS.map(([name, description, members, likes, downloads_7d, author], i) => ({
       id: `store.example.com:combo_${i + 1}`,
@@ -251,6 +305,14 @@ export class MemoryRepo implements Repo {
     return combo
   }
 
+  removeCombo(id: string, login: string): boolean {
+    const idx = this.combos.findIndex((x) => x.id === id && x.author === login)
+    if (idx < 0) return false
+    this.combos.splice(idx, 1)
+    this.combosRevision++
+    return true
+  }
+
   setComboStatus(id: string, status: Combo['status']): Combo | null {
     const c = this.combos.find((x) => x.id === id)
     if (!c) return null
@@ -310,6 +372,7 @@ export class MemoryRepo implements Repo {
     const id = m ? m[2] : `fast_${Date.now()}`
     const plugin: Plugin = {
       id,
+      kind: 'plugin',
       version: '1.0.0',
       name: id,
       description: '（提速收录 · 提取管线产出）',

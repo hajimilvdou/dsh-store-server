@@ -101,6 +101,7 @@ tr:hover td{background:var(--hover)}
     <button data-page="fed" onclick="page('fed')">🌐 联邦互联</button>
     <button data-page="upd" onclick="page('upd')">🔄 系统更新</button>
     <button data-page="plugins" onclick="page('plugins')">📦 插件库</button>
+    <button data-page="agents" onclick="page('agents')">🤖 Agent 预设</button>
     <button data-page="combos" onclick="page('combos')">🗂 组合审核</button>
     <button data-page="users" onclick="page('users')">👥 用户管理</button>
     <button data-page="reports" onclick="page('reports')">📥 上报队列</button>
@@ -481,22 +482,22 @@ let pluginPage = 1
 const PLUGIN_PAGE_SIZE = 20
 
 RENDER.plugins = async () => {
-  const [plugins] = await Promise.all([api('/admin/plugins'), api('/admin/blocklist')])
+  const [plugins] = await Promise.all([api('/admin/plugins?kind=plugin'), api('/admin/blocklist')])
   const q = pluginQuery.trim().toLowerCase()
-  const filtered = plugins.filter((p) =>
+  const filtered = plugins.filter((p) => p.kind !== 'preset' && (
     !q ||
     String(p.id).toLowerCase().includes(q) ||
     String(p.author || '').toLowerCase().includes(q) ||
     String(p.repo || '').toLowerCase().includes(q) ||
     String(p.description || '').toLowerCase().includes(q) ||
-    String(p.install || '').toLowerCase().includes(q),
-  )
+    String(p.install || '').toLowerCase().includes(q)
+  ))
   const total = filtered.length
   const pages = Math.max(1, Math.ceil(total / PLUGIN_PAGE_SIZE))
   if (pluginPage > pages) pluginPage = pages
   const pageItems = filtered.slice((pluginPage - 1) * PLUGIN_PAGE_SIZE, pluginPage * PLUGIN_PAGE_SIZE)
   const rows = pageItems.map((p) => `<tr>
-    <td><b>${esc(p.id)}</b>${p.install ? `<br><span style="font-size:11px;color:var(--tx2)">dsh plugin add ${esc(p.install)}</span>` : ''}</td>
+    <td><b>${esc(p.id)}</b>${p.preset_name ? `<br><span style="font-size:11px;color:var(--gold)">含 Agent 预设：${esc(p.preset_name)}</span>` : ''}${p.install ? `<br><span style="font-size:11px;color:var(--tx2)">dsh plugin add ${esc(p.install)}</span>` : ''}</td>
     <td>${esc(p.author || '—')}</td>
     <td>${p.source === 'official' ? '<span class="pill ok">官方</span>' : '<span class="pill wa">社区</span>'}</td>
     <td>${p.stars}</td><td style="color:var(--up)">+${p.stars_delta_day}</td><td>${p.quality_score}</td>
@@ -525,6 +526,38 @@ RENDER.plugins = async () => {
       ${rows || '<tr><td colspan="9" style="color:var(--tx2)">无匹配插件</td></tr>'}
     </table>
     ${pages > 1 ? `<div class="frow" style="margin-top:10px;flex-wrap:wrap">${pageBtns}</div>` : ''}
+  </div>`
+}
+
+let agentQuery = ''
+RENDER.agents = async () => {
+  const plugins = await api('/admin/plugins?kind=preset')
+  const q = agentQuery.trim().toLowerCase()
+  const agents = plugins.filter((p) => p.kind === 'preset' && (!q ||
+    String(p.id).toLowerCase().includes(q) ||
+    String(p.name || '').toLowerCase().includes(q) ||
+    String(p.preset_name || '').toLowerCase().includes(q) ||
+    String(p.description || '').toLowerCase().includes(q)))
+  const rows = agents.map((p) => `<tr>
+    <td><b>${esc(p.name)}</b><br><span style="font-size:11px;color:var(--tx2)">${esc(p.id)} · preset/${esc(p.preset_name || p.name)}</span></td>
+    <td>${esc(p.author || '—')}</td>
+    <td style="font-size:11.5px">${esc(p.description || '—')}</td>
+    <td>${p.stars}</td><td>${p.downloads_7d}</td>
+    <td>${p.status === 'blocked' ? '<span class="pill ba">已拉黑</span>' : p.status === 'needs_review' ? '<span class="pill wa">待完善</span>' : '<span class="pill ok">已收录</span>'}</td>
+    <td><a href="${esc(p.repo_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--brand1);text-decoration:none;font-size:11.5px">源地址 ↗</a></td>
+  </tr>`).join('')
+  return `<div class="a-title">🤖 Agent 预设 <small>（kind=preset · 用户安装 = 复制到 ~/.dsh/.agent-presets/&lt;preset_name&gt;）</small></div>
+  <div class="a-card">
+    <div class="frow">
+      <input id="agentSearch" placeholder="搜索 Agent 名称 / 预设名 / 简介…" value="${esc(agentQuery)}">
+      <button class="abtn pri" style="flex:none" onclick="agentQuery=document.getElementById('agentSearch').value.trim();page('agents')">搜索</button>
+      <button class="abtn" style="flex:none" onclick="agentQuery='';page('agents')">重置</button>
+    </div>
+    <div class="msg" style="margin-bottom:8px">共 <b style="color:var(--brand2)">${agents.length}</b> 个 Agent 预设</div>
+    <table>
+      <tr><th>Agent</th><th>作者</th><th>简介</th><th>⭐</th><th>7天下载</th><th>状态</th><th>操作</th></tr>
+      ${rows || '<tr><td colspan="7" style="color:var(--tx2)">暂无 Agent 预设</td></tr>'}
+    </table>
   </div>`
 }
 

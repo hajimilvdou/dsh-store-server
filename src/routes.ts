@@ -233,7 +233,13 @@ export async function registerRoutes(
   }))
 
   /* ================= 数据通道（增量 + 全量兜底） ================= */
-  app.get<{ Querystring: { since?: string } }>(API.plugins, async (req): Promise<Delta<Plugin>> => repo.pluginsDelta(req.query.since))
+  app.get<{ Querystring: { since?: string; kind?: string } }>(API.plugins, async (req): Promise<Delta<Plugin>> => {
+    const delta = repo.pluginsDelta(req.query.since)
+    const kind = req.query.kind
+    if (kind === 'plugin') return { ...delta, items: delta.items.filter((p) => p.kind !== 'preset') }
+    if (kind === 'agent' || kind === 'preset') return { ...delta, items: delta.items.filter((p) => p.kind === 'preset') }
+    return delta
+  })
   app.get<{ Querystring: { since?: string } }>(API.combos, async (req): Promise<Delta<Combo>> => repo.combosDelta(req.query.since))
   app.get(API.announcements, async (): Promise<Announcement[]> => repo.getAnnouncements())
   app.get(API.nodes, async () => repo.getNodes())
@@ -304,6 +310,15 @@ export async function registerRoutes(
     repo.log(u.login, 'combo.create', { id: combo.id })
     return combo
   })
+  app.delete<{ Params: { id: string } }>(`${API.createCombo}/:id`, async (req, reply) => {
+    const u = requireUser(req, reply)
+    if (!u) return
+    if (!repo.removeCombo(req.params.id, u.login)) {
+      return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
+    }
+    repo.log(u.login, 'combo.remove', { id: req.params.id })
+    return { ok: true, combos: repo.getCombos() }
+  })
 
   /* ================= 云端安装清单（登录） ================= */
   app.get(API.meInstalls, async (req, reply) => {
@@ -349,7 +364,7 @@ export async function registerRoutes(
     }
     const r = repo.addReport({ pkg: pkg.trim(), repo_url: req.body?.repo_url ?? null, version: req.body?.version ?? '' })
     repo.log(u.login, 'report.missing', { pkg })
-    return r
+    return { ok: true, report: r, message: `已收到上报：${pkg.trim()}，我们会持续跟进` }
   })
 
   /* ================= 联邦（服务器间） ================= */
@@ -430,9 +445,13 @@ export async function registerRoutes(
     }
   })
 
-  app.get(API.adminPlugins, async (req, reply) => {
+  app.get<{ Querystring: { kind?: string } }>(API.adminPlugins, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return repo.getPlugins()
+    const all = repo.getPlugins()
+    const kind = req.query.kind
+    if (kind === 'plugin') return all.filter((p) => p.kind !== 'preset')
+    if (kind === 'agent' || kind === 'preset') return all.filter((p) => p.kind === 'preset')
+    return all
   })
 
   /* ---- 插件库一键安全扫描（后台任务 + 进度轮询） ---- */

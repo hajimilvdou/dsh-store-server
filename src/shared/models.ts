@@ -8,6 +8,9 @@ export type PluginSource = 'official' | 'community'
 
 export type PluginStatus = 'listed' | 'blocked' | 'needs_review' | 'pending'
 
+/** 可安装物类型：Plugin 走 dsh plugin add；Preset 走文件复制到 .agent-presets。 */
+export type InstallKind = 'plugin' | 'preset'
+
 /** 风险标签（v3.1 S1 安全扫描管线产出）。 */
 export type RiskTag =
   | 'has_install_script'
@@ -35,6 +38,10 @@ export interface SecurityProfile {
 export interface Plugin {
   /** 包名，如 "dsh-memory"。 */
   id: string
+  /** 可安装物类型：插件 / 预设。 */
+  kind: InstallKind
+  /** Preset 的目录名（kind=preset 或双形态仓库时存在），安装 = 复制到 ~/.dsh/.agent-presets/<preset_name>。 */
+  preset_name?: string
   /** 最新版本号（数据通道下发，供本地更新检测比对）。 */
   version: string
   name: string
