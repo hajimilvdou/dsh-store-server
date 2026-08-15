@@ -1,4 +1,4 @@
-﻿# DSH 鎻掍欢鍟嗗煄鏈嶅姟绔?鈥斺€?缂栨帓锛坉b + migrate + api + redis锛?# 鐢熶骇閮ㄧ讲锛欸H_IMAGE=<GitHub鐢ㄦ埛鍚?/<浠撳簱鍚? docker compose pull && docker compose up -d
+# DSH 鎻掍欢鍟嗗煄鏈嶅姟绔?鈥斺€?缂栨帓锛坉b + migrate + api + redis锛?# 鐢熶骇閮ㄧ讲锛欸H_IMAGE=<GitHub鐢ㄦ埛鍚?/<浠撳簱鍚? docker compose pull && docker compose up -d
 #   锛堟媺鍙?GitHub Actions 鏋勫缓濂界殑闀滃儚锛屾棤闇€鍦ㄦ湇鍔″櫒涓婃瀯寤猴級
 # 鏈湴寮€鍙戯細docker compose up -d --build锛堟湰鍦版瀯寤猴級
 services:
@@ -31,10 +31,18 @@ services:
     build: .
     restart: unless-stopped
     ports: ["8080:8080"]
+    # 面板一键热更新依赖：宿主 docker socket + 重建脚本持久化目录。
+    # Windows Docker Desktop 可用 DOCKER_SOCKET=\\.\pipe\docker_engine 覆盖。
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - /opt/dsh-store:/opt/dsh-store
     environment:
       DATABASE_URL: postgres://store:${DB_PASSWORD}@db:5432/dshstore
       PORT: "8080"
       HOST: "0.0.0.0"
+      GH_IMAGE: ${GH_IMAGE:-hajimilvdou/dsh-store-server}
+      TAG: ${TAG:-latest}
+      NET: dshstore-net
       # 浠ヤ笅瀵嗛挜鍧囦负鍙€夛細鐣欑┖鏃跺湪绠＄悊绔€岄厤缃腑蹇冦€嶅～鍐欙紙淇濆瓨鍗崇儹鏇存柊锛夈€?      # 鐜鍙橀噺浠呬綔棣栧惎鍏滃簳銆傜敓浜х幆澧冨缓璁嚦灏戣缃?ADMIN_TOKEN 涓?OAuth 涓夐」銆?      GITHUB_TOKENS: ${GITHUB_TOKENS:-}
       SYNC_TOPIC: ${SYNC_TOPIC:-dsh-plugin}
       SYNC_MAX_REPOS: ${SYNC_MAX_REPOS:-0}
@@ -62,3 +70,7 @@ services:
 volumes:
   pgdata: {}
   redisdata: {}
+
+networks:
+  default:
+    name: dshstore-net

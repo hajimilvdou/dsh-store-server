@@ -79,6 +79,8 @@ export class MemoryRepo implements Repo {
     started_by: '',
     started_at: '',
     finished_at: null,
+    progress_pct: 0,
+    message: '待命',
   }
 
   /**

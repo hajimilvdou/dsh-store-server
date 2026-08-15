@@ -119,13 +119,20 @@ export class GithubSync {
 
   /** 配置中心热更新 token 池（数组或逗号分隔串；自动去空去重；清空即停用同步）。 */
   setTokens(raw: string[] | string): void {
+    const wasEnabled = this.enabled
     const list = Array.isArray(raw) ? raw : String(raw).split(',')
     this.tokens = [...new Set(list.map((t) => String(t).trim()).filter(Boolean))]
     this.tokenIndex = 0
     this.enabled = this.tokens.length > 0
     this.status.enabled = this.enabled
     this.status.tokens = this.tokens.length
-    if (!this.enabled) this.status.last_result = '未配置 GitHub 搜索 token（配置中心可填写）'
+    if (!this.enabled) {
+      this.status.last_result = '未配置 GitHub 搜索 token（配置中心可填写）'
+    } else if (!wasEnabled || this.status.last_result?.includes('未配置')) {
+      // 从“未配置 → 已启用”时清掉旧文案，避免仪表盘出现“已启用 3 枚 token，结果却显示未配置”
+      this.status.last_result = `已启用 ${this.tokens.length} 枚搜索 token，等待抓取任务`
+      this.status.last_error = null
+    }
   }
 
   /** 配置中心热更新抓取上限：0 = 服务器默认全量；>0 = 测试限量（如 100）。 */

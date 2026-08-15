@@ -24,8 +24,41 @@ TAG="${TAG:-latest}"
 NET="${NET:-dshstore-net}"
 step() { echo "==> $*"; }
 
-# ---------- 模式 A：容器内热更新（docker socket + 重建脚本齐备时） ----------
-if [[ -S /var/run/docker.sock ]] && command -v docker >/dev/null 2>&1 && [[ -f /opt/dsh-store/api.run.sh ]]; then
+# ---------- 模式 A：容器内热更新（挂载了宿主 docker socket 即可；重建脚本缺失时自动生成） ----------
+if [[ -S /var/run/docker.sock ]] && command -v docker >/dev/null 2>&1; then
+  PORT="${PORT:-8080}"
+  mkdir -p /opt/dsh-store
+  if [[ ! -f /opt/dsh-store/api.run.sh ]]; then
+    step "首次面板更新：自动生成 /opt/dsh-store/api.run.sh"
+    cat > /opt/dsh-store/api.run.sh <<RUNEOF
+#!/usr/bin/env bash
+set -euo pipefail
+IMAGE="\${1:-ghcr.io/${GH_IMAGE}:${TAG}}"
+docker run -d --name dshstore-api --network "${NET}" --restart unless-stopped \\
+  -p "${PORT}:8080" \\
+  -v /var/run/docker.sock:/var/run/docker.sock \\
+  -v /opt/dsh-store:/opt/dsh-store \\
+  -e DATABASE_URL="${DATABASE_URL:-}" \\
+  -e PORT=8080 -e HOST=0.0.0.0 \\
+  -e GH_IMAGE="${GH_IMAGE}" -e TAG="${TAG}" -e NET="${NET}" \\
+  -e GITHUB_TOKENS="${GITHUB_TOKENS:-}" \\
+  -e SYNC_TOPIC="${SYNC_TOPIC:-dsh-plugin}" \\
+  -e SYNC_MAX_REPOS="${SYNC_MAX_REPOS:-0}" \\
+  -e GITHUB_OAUTH_CLIENT_ID="${GITHUB_OAUTH_CLIENT_ID:-}" \\
+  -e GITHUB_OAUTH_CLIENT_SECRET="${GITHUB_OAUTH_CLIENT_SECRET:-}" \\
+  -e OAUTH_CALLBACK_URL="${OAUTH_CALLBACK_URL:-}" \\
+  -e JWT_SECRET="${JWT_SECRET:-}" \\
+  -e ADMIN_TOKEN="${ADMIN_TOKEN:-}" \\
+  -e ACCESS_PASSWORD="${ACCESS_PASSWORD:-}" \\
+  -e FEDERATION_ENABLED="${FEDERATION_ENABLED:-true}" \\
+  -e FEDERATION_SECRET="${FEDERATION_SECRET:-}" \\
+  -e UPDATE_REPO_URL="${UPDATE_REPO_URL:-}" \\
+  -e CLUSTER_ID="${CLUSTER_ID:-}" \\
+  "\$IMAGE"
+RUNEOF
+    chmod 700 /opt/dsh-store/api.run.sh
+  fi
+  [[ -f /opt/dsh-store/api.current-image ]] || echo "ghcr.io/${GH_IMAGE}:${TAG}" > /opt/dsh-store/api.current-image
   NEW_IMAGE="ghcr.io/${GH_IMAGE}:${VERSION}"
   OLD_IMAGE="$(cat /opt/dsh-store/api.current-image 2>/dev/null || echo "ghcr.io/${GH_IMAGE}:${TAG}")"
 

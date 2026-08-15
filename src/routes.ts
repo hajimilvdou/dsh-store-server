@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { readFile } from 'node:fs/promises'
-import { statfsSync } from 'node:fs'
+import { existsSync, statfsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -671,13 +671,37 @@ export async function registerRoutes(
 
   app.get(API.adminUpdateStatus, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
+    const platform = process.platform
+    const dockerSocket = existsSync('/var/run/docker.sock')
+    const rebuildScript = existsSync('/opt/dsh-store/api.run.sh')
+    const track = repo.getConfig().update.track
+    const current = deployedVersionTag()
+    const latestRelease = runtime.latestRelease
+    const latestCommit = runtime.latestCommit
+    let hasUpdate = false
+    if (track === 'commit' && latestCommit?.sha) {
+      const short = latestCommit.sha.slice(0, 7)
+      hasUpdate = current !== 'main' && current !== latestCommit.sha && !current.startsWith(short)
+    } else if (latestRelease?.tag) {
+      hasUpdate = normVersionTag(latestRelease.tag) !== normVersionTag(current)
+    }
     return {
       ...repo.getUpdateState(),
-      latest_release: runtime.latestRelease,
-      latest_commit: runtime.latestCommit,
-      track: repo.getConfig().update.track,
+      latest_release: latestRelease,
+      latest_commit: latestCommit,
+      track,
       repo_url: repo.getConfig().update.repo_url,
-      current_version: deployedVersionTag(),
+      current_version: current,
+      has_update: hasUpdate,
+      platform,
+      panel_update_mode:
+        platform !== 'linux'
+          ? `当前平台 ${platform}：面板一键更新仅支持 Linux`
+          : dockerSocket
+            ? rebuildScript
+              ? 'container'
+              : 'container-self-bootstrap'
+            : 'host-script',
     }
   })
   app.post('/admin/update/check', async (req, reply) => {
@@ -695,7 +719,11 @@ export async function registerRoutes(
       if (!c) {
         return { mode: 'commit', latest_commit: null, current_version: current, has_update: false, message: '检测失败：无法访问 GitHub（请确认网络可访问、已配置 GITHUB_TOKENS、仓库地址正确）' }
       }
-      return { mode: 'commit', latest_commit: c, current_version: current, has_update: c.sha !== current, message: `最新提交 ${c.sha.slice(0, 7)}：${(c.message ?? '').split('\n')[0].slice(0, 60)}` }
+      const short = c.sha.slice(0, 7)
+      // commit 通道的“当前版本”可能是：main（分支镜像）、完整/短 sha（commit 镜像）或版本 tag（release 镜像）。
+      // 只有明确是 main / 该 sha 的镜像时才认为已是最新，避免容器部署下永远误报“有新提交”。
+      const upToDate = current === 'main' || current === c.sha || current.startsWith(short)
+      return { mode: 'commit', latest_commit: c, current_version: current, has_update: !upToDate, message: upToDate ? `已是最新提交 ${short}：${(c.message ?? '').split('\n')[0].slice(0, 60)}` : `最新提交 ${short}：${(c.message ?? '').split('\n')[0].slice(0, 60)}` }
     }
     const latest = await sync.checkLatestRelease(repoUrl)
     runtime.latestRelease = latest
@@ -739,11 +767,13 @@ export async function registerRoutes(
       return reply.code(400).send({ error: 'bad_request', message: hint })
     }
     repo.log('admin', 'update.run', { version, track })
-    // 在线一键更新：真实执行 scripts/update.sh（git 拉取 → 构建 → 迁移 → 切换 → 自检 → 失败回滚）
-    const state = await updater.run(version)
+    // 在线一键更新改为后台任务：立即返回初始状态，前端轮询 /admin/update/status 展示进度横幅。
+    const running = updater.run(version)
+    void running.catch(() => {})
+    const state = repo.getUpdateState()
     if (state.stage === 'failed') {
       return reply.code(500).send({ ...state, error: state.error ?? '更新失败' })
     }
-    return state
+    return { started: true, ...state }
   })
 }

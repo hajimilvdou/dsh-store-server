@@ -180,7 +180,7 @@ export class PgRepo extends MemoryRepo {
     this.starSnapshots = (sRows as Array<{ repo: string; date: string; stars: number }>).map((s) => ({ repo: s.repo, date: String(s.date).slice(0, 10), stars: s.stars }))
 
     this.config = { ...structuredClone(DEFAULT_CONFIG), ...(await this.kvGet<ServerConfig>('config', this.config)) }
-    this.updateState = await this.kvGet<UpdateState>('update_state', this.updateState)
+    this.updateState = { ...this.updateState, ...(await this.kvGet<Partial<UpdateState>>('update_state', this.updateState)) }
     this.blocklist = await this.kvGet<string[]>('blocklist', [])
     this.pluginsRevision = await this.kvGet<number>('plugins_revision', this.pluginsRevision)
     this.combosRevision = await this.kvGet<number>('combos_revision', this.combosRevision)

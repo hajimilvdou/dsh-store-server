@@ -64,6 +64,10 @@ export interface UpdateState {
   started_by: string
   started_at: string
   finished_at: string | null
+  /** 面板进度横幅展示用：0~100。 */
+  progress_pct: number
+  /** 当前步骤的人话描述。 */
+  message: string
 }
 
 export interface AuditEntry {
