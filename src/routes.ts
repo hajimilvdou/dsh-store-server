@@ -181,8 +181,10 @@ export async function registerRoutes(
       return reply.code(503).send({ error: 'not_configured', message: '未配置 GitHub OAuth 凭据（Client ID/Secret/JWT 密钥），可在管理端配置中心填写' })
     }
     // 回调地址必须与 GitHub OAuth App 注册的 callback URL 完全一致：
-    // 默认按请求 host 拼接；反代/域名场景用 OAUTH_CALLBACK_URL 显式覆盖。
-    const base = process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`
+    // 优先 OAUTH_CALLBACK_URL 显式配置；否则强制 https + 请求 host。
+    // ⚠ 不能使用 req.protocol：反代(nginx/caddy)内部转发时 protocol 可能是 http,
+    // 拼出的 redirect_uri 与 GitHub 登记不一致 → "The redirect_uri is not associated" 报错。
+    const base = process.env.OAUTH_CALLBACK_URL ?? `https://${req.headers.host ?? 'blog.1qwq1.top'}`
     const state = auth.newState()
     return reply.redirect(auth.authorizeUrl(`${base}/auth/callback`, state))
   })
