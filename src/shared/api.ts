@@ -14,6 +14,8 @@ export const API = {
   combos: '/api/v1/combos',
   /** 公告列表。 */
   announcements: '/api/v1/announcements',
+  /** SSE 实时事件流（点赞/公告/插件库变更推送；EventSource 直连，跨源需 CORS）。 */
+  events: '/api/v1/events',
   /** 联邦 / LB 节点与延迟表。 */
   nodes: '/api/v1/nodes',
   clusterNodes: '/api/v1/cluster/nodes',

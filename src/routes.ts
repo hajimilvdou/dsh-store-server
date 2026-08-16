@@ -22,6 +22,7 @@ import { scanPlugin } from './security/scan.js'
 import type { AlertService, RuntimeState } from './security/guard.js'
 import type { UpdateService } from './update.js'
 import { serverVersion, deployedVersionTag, normVersionTag } from './update.js'
+import { Broadcast } from './broadcast.js'
 
 interface AuthUser {
   userId: string
@@ -46,6 +47,8 @@ export async function registerRoutes(
 ): Promise<void> {
   // 纯离线演示模式：未配置 OAuth 且未配置 GitHub token 时才接受演示账号（生产不残留后门）
   const demoMode = !auth.enabled && !sync.enabled
+  // SSE 广播器：点赞/公告/插件库变更实时推送（单实例；多实例预留 Redis pub/sub）。
+  const broadcast = new Broadcast()
   const currentUser = (req: FastifyRequest): AuthUser | null => {
     const authHeader = req.headers.authorization
     if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
@@ -245,6 +248,35 @@ export async function registerRoutes(
   app.get(API.nodes, async () => repo.getNodes())
   app.get(API.clusterNodes, async () => repo.getNodes())
 
+  /* ================= SSE 实时事件流 =================
+   * 广播型数据推送（点赞数/公告/插件库变更）：EventSource 直连，跨源需 CORS 头。
+   * 事件格式：event: <type>\ndata: <json>\n\n；30s 心跳注释保活。
+   */
+  app.get(API.events, async (_req, reply) => {
+    reply.hijack()
+    const raw = reply.raw
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*',
+    })
+    raw.write(`event: connected\ndata: {"hello":true}\n\n`)
+    const unsubscribe = broadcast.subscribe(reply)
+    const heartbeat = setInterval(() => {
+      try {
+        raw.write(': ping\n\n')
+      } catch {
+        /* 连接已断，交由 close 事件清理 */
+      }
+    }, 30000)
+    raw.on('close', () => {
+      clearInterval(heartbeat)
+      unsubscribe()
+    })
+  })
+
   /* ================= 匿名会话凭证 ================= */
   app.post<{ Body: { instance_id?: string } }>(API.anonToken, async (req) => {
     const token = repo.mintAnonToken(req.body?.instance_id ?? 'anon')
@@ -286,6 +318,8 @@ export async function registerRoutes(
     }
     const res = repo.toggleLike(u.userId, target)
     repo.applyLikeCount(target, res.count)
+    // 实时推送点赞变化(客户端据此本地更新计数,无需重拉)。
+    broadcast.publish('likes', { target, likes: res.count, liked: res.liked })
     return { target, likes: res.count, liked: res.liked }
   })
 
@@ -591,11 +625,14 @@ export async function registerRoutes(
     }
     const a = repo.addAnnouncement({ version: version.trim(), level: level === 'important' ? 'important' : 'info', content })
     repo.log('admin', 'announcement.publish', { id: a.id })
+    // 实时推送新公告(客户端立即刷新公告列表)。
+    broadcast.publish('announcements', { id: a.id, version: a.version })
     return a
   })
   app.delete<{ Params: { id: string } }>(`${API.adminAnnouncements}/:id`, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     if (!repo.removeAnnouncement(req.params.id)) return reply.code(404).send({ error: 'not_found' })
+    broadcast.publish('announcements', { removed: req.params.id })
     return { ok: true }
   })
 
@@ -777,7 +814,13 @@ export async function registerRoutes(
       return reply.code(503).send({ error: 'not_configured', message: '未配置 GITHUB_TOKENS' })
     }
     const run = sync.startRun(repo.syncTarget())
-    void run.done.then(() => repo.persistSync()).catch(() => {})
+    void run.done
+      .then(() => {
+        repo.persistSync()
+        // 实时推送插件库变更(客户端据此触发增量刷新)。
+        broadcast.publish('plugins', { revision: repo.getPluginsRevision() })
+      })
+      .catch(() => {})
     return { started: run.started, status: sync.status, progress: run.progress }
   })
   app.post<{ Body: { version: string } }>(API.adminUpdate, async (req, reply) => {
