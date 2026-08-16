@@ -58,6 +58,8 @@ export const CONFIG_KEYS = {
   /* 账号 / 台账 */
   restore_max_points: 'restore.max_points',
   combo_limit: 'user.combo_limit',
+  /** 插件组审核开关：开=用户发布进待审；关=发布直接实时上线。 */
+  combo_review_enabled: 'user.combo_review_enabled',
   notify_badge_enabled: 'notify.badge_enabled',
   registration_enabled: 'user.registration_enabled',
   registration_methods: 'user.registration_methods',
@@ -160,6 +162,9 @@ export interface ServerConfig {
   }
   user: {
     combo_limit: number
+    /** 插件组审核开关：true=用户发布需管理员审核(进 pending)；false=发布直接实时上线(published)。
+     *  已通过审核的组合,作者后续编辑保存免审(保持 published)。 */
+    combo_review_enabled: boolean
     /** 注册开关（关闭后新用户无法登录注册）。 */
     registration_enabled: boolean
     /** 可用注册方式（当前仅支持 'github'）。 */
@@ -285,6 +290,7 @@ export const DEFAULT_CONFIG: ServerConfig = {
   },
   user: {
     combo_limit: 3,
+    combo_review_enabled: true,
     registration_enabled: true,
     registration_methods: ['github'],
   },

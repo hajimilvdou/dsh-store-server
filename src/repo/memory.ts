@@ -301,8 +301,9 @@ export class MemoryRepo implements Repo {
   }
 
   createCombo(input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>; author: string; authorGithub: string }): Combo {
+    // id 加随机后缀：同一毫秒创建多个组合时避免主键冲突
     const combo: Combo = {
-      id: `store.example.com:combo_${Date.now()}`,
+      id: `store.example.com:combo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       slug: input.name,
       name: input.name,
       description: input.description,

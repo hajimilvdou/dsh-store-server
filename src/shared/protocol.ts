@@ -55,6 +55,8 @@ export interface ClientConfigPatch {
   combos_refresh_min: number
   restore_max_points: number
   combo_limit: number
+  /** 插件组审核开关：true=发布需审核；false=发布直接上线。客户端弹窗提示用。 */
+  combo_review_enabled?: boolean
 }
 
 /**

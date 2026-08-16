@@ -694,6 +694,7 @@ RENDER.cfg = async () => {
       <label class="ck"><input type="checkbox" data-path="user.registration_methods" data-kind="methods" value="github" ${methods.includes('github') ? 'checked' : ''}>GitHub 登录（当前唯一支持）</label>${sv()}
     </div>
     ${num('每用户组合上限', 'user.combo_limit', cfg.user.combo_limit)}
+    ${bool('插件组审核（开=发布需审核；关=发布直接实时上线）', 'user.combo_review_enabled', cfg.user.combo_review_enabled)}
   </div></div>
 
   <div class="a-card"><h4>🔎 GitHub 库同步</h4><div class="cfg">

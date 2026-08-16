@@ -271,6 +271,8 @@ export async function registerRoutes(
       combos_refresh_min: cfg.sync.combos_refresh_min,
       restore_max_points: cfg.restore.max_points,
       combo_limit: cfg.user.combo_limit,
+      /** 插件组审核开关：true=发布需审核；false=发布直接上线。客户端弹窗提示用。 */
+      combo_review_enabled: cfg.user.combo_review_enabled,
     },
     // 客户端插件版本推送：配置中心 client.plugin_version 非空即下发
     client_plugin: repo.getConfig().client.plugin_version
@@ -395,7 +397,15 @@ export async function registerRoutes(
       author: u.login,
       authorGithub: u.login,
     })
-    repo.log(u.login, 'combo.create', { id: combo.id, members: combo.members.length })
+    // 审核开关：开 → pending 待审；关 → published 直接实时上线。
+    // 已通过审核的组合编辑保存时保持 published(免审),由 updateCombo 保留状态实现。
+    if (!cfg.user.combo_review_enabled && combo.status === 'pending') {
+      repo.setComboStatus(combo.id, 'published')
+      combo.status = 'published'
+    }
+    repo.log(u.login, 'combo.create', { id: combo.id, members: combo.members.length, status: combo.status })
+    // 实时推送：其他在线客户端立即看到新组合（SSE → 增量拉取）。
+    broadcast.publish('combos', { id: combo.id, status: combo.status })
     return combo
   })
   /* ================= 编辑组合（登录；仅作者本人） ================= */
@@ -413,6 +423,8 @@ export async function registerRoutes(
     })
     if (!c) return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
     repo.log(u.login, 'combo.update', { id: c.id, members: c.members.length })
+    // 实时推送：订阅者/浏览者立即看到更新后的成员与描述（SSE → 增量拉取）。
+    broadcast.publish('combos', { id: c.id, status: c.status })
     return c
   })
   app.delete<{ Params: { id: string } }>(`${API.createCombo}/:id`, async (req, reply) => {
@@ -422,6 +434,8 @@ export async function registerRoutes(
       return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
     }
     repo.log(u.login, 'combo.remove', { id: req.params.id })
+    // 实时推送：其他客户端立即移除该组合（SSE → 增量拉取,增量含 tombstones）。
+    broadcast.publish('combos', { id: req.params.id, removed: true })
     return { ok: true, combos: repo.getCombos() }
   })
 
