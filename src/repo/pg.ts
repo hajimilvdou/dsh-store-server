@@ -132,10 +132,10 @@ export class PgRepo extends MemoryRepo {
 
     const { rows: cRows } = await this.pool.query('SELECT * FROM combos')
     const { rows: mRows } = await this.pool.query('SELECT * FROM combo_members')
-    const membersByCombo = new Map<string, Array<{ pkg: string; version: string }>>()
-    for (const m of mRows as Array<{ combo_id: string; pkg: string; version: string }>) {
+    const membersByCombo = new Map<string, Array<{ pkg: string; version: string; install_mode: 'auto' | 'manual' }>>()
+    for (const m of mRows as Array<{ combo_id: string; pkg: string; version: string; install_mode: string | null }>) {
       const list = membersByCombo.get(m.combo_id) ?? []
-      list.push({ pkg: m.pkg, version: m.version })
+      list.push({ pkg: m.pkg, version: m.version, install_mode: m.install_mode === 'manual' ? 'manual' : 'auto' })
       membersByCombo.set(m.combo_id, list)
     }
     this.combos = (cRows as Array<{ id: string; slug: string; name: string; description: string; author_name: string; author_id: string | null; likes: number; downloads_7d: number; status: Combo['status']; origin_server: string; version: number; updated_at: string }>).map((c) => ({
@@ -231,7 +231,7 @@ export class PgRepo extends MemoryRepo {
           [c.id, c.slug, c.name, c.description, c.author_github, c.author, c.likes, c.downloads_7d, c.status, c.origin_server, c.version, c.updated_at],
         )
         for (const m of c.members) {
-          await client.query('INSERT INTO combo_members (combo_id, pkg, version) VALUES ($1,$2,$3)', [c.id, m.pkg, m.version])
+          await client.query('INSERT INTO combo_members (combo_id, pkg, version, install_mode) VALUES ($1,$2,$3,$4)', [c.id, m.pkg, m.version, m.install_mode === 'manual' ? 'manual' : 'auto'])
         }
       }
       for (const i of this.installs) {
@@ -312,10 +312,20 @@ export class PgRepo extends MemoryRepo {
     this.fire('UPDATE combos SET likes = $1 WHERE id = $2', [count, target])
   }
 
-  override createCombo(input: { name: string; description: string; members: string[]; author: string; authorGithub: string }): Combo {
+  override createCombo(input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>; author: string; authorGithub: string }): Combo {
     const c = super.createCombo(input)
     this.fire('INSERT INTO combos (id, slug, name, description, author_id, author_name, likes, downloads_7d, status, origin_server, version, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [c.id, c.slug, c.name, c.description, c.author_github, c.author, c.likes, c.downloads_7d, c.status, c.origin_server, c.version, c.updated_at])
-    for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version) VALUES ($1,$2,$3)', [c.id, m.pkg, m.version])
+    for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version, install_mode) VALUES ($1,$2,$3,$4)', [c.id, m.pkg, m.version, m.install_mode === 'manual' ? 'manual' : 'auto'])
+    this.kvSet('combos_revision', this.combosRevision)
+    return c
+  }
+
+  override updateCombo(id: string, login: string, input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }> }): Combo | null {
+    const c = super.updateCombo(id, login, input)
+    if (!c) return null
+    this.fire('UPDATE combos SET slug = $1, name = $2, description = $3, version = $4, updated_at = now() WHERE id = $5', [c.slug, c.name, c.description, c.version, c.id])
+    this.fire('DELETE FROM combo_members WHERE combo_id = $1', [c.id])
+    for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version, install_mode) VALUES ($1,$2,$3,$4)', [c.id, m.pkg, m.version, m.install_mode === 'manual' ? 'manual' : 'auto'])
     this.kvSet('combos_revision', this.combosRevision)
     return c
   }
@@ -358,9 +368,9 @@ export class PgRepo extends MemoryRepo {
     return r
   }
 
-  override addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string }): Announcement {
+  override addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string; user_id?: string | null }): Announcement {
     const a = super.addAnnouncement(input)
-    this.fire('INSERT INTO announcements (id, version, level, content, origin_server, published_at) VALUES ($1,$2,$3,$4,$5,$6)', [a.id, a.version, a.level, a.content, a.origin_server, a.published_at])
+    this.fire('INSERT INTO announcements (id, version, level, content, origin_server, published_at, user_id) VALUES ($1,$2,$3,$4,$5,$6,$7)', [a.id, a.version, a.level, a.content, a.origin_server, a.published_at, a.user_id ?? null])
     return a
   }
 

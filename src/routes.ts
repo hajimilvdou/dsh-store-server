@@ -287,7 +287,11 @@ export async function registerRoutes(
     return delta
   })
   app.get<{ Querystring: { since?: string } }>(API.combos, async (req): Promise<Delta<Combo>> => repo.combosDelta(req.query.since))
-  app.get(API.announcements, async (): Promise<Announcement[]> => repo.getAnnouncements())
+  app.get(API.announcements, async (req): Promise<Announcement[]> => {
+    // 私人公告（user_id 非空）仅对目标用户可见；匿名/未登录只看全站公告。
+    const me = currentUser(req)
+    return repo.getAnnouncements().filter((a) => !a.user_id || (me !== null && a.user_id === me.login))
+  })
   app.get(API.nodes, async () => repo.getNodes())
   app.get(API.clusterNodes, async () => repo.getNodes())
 
@@ -374,7 +378,7 @@ export async function registerRoutes(
   })
 
   /* ================= 创建组合（登录） ================= */
-  app.post<{ Body: { name: string; description?: string; members?: string[] } }>(API.createCombo, async (req, reply) => {
+  app.post<{ Body: { name: string; description?: string; members?: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }> } }>(API.createCombo, async (req, reply) => {
     const u = requireUser(req, reply)
     if (!u) return
     const name = req.body?.name
@@ -391,8 +395,25 @@ export async function registerRoutes(
       author: u.login,
       authorGithub: u.login,
     })
-    repo.log(u.login, 'combo.create', { id: combo.id })
+    repo.log(u.login, 'combo.create', { id: combo.id, members: combo.members.length })
     return combo
+  })
+  /* ================= 编辑组合（登录；仅作者本人） ================= */
+  app.put<{ Params: { id: string }; Body: { name: string; description?: string; members?: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }> } }>(`${API.createCombo}/:id`, async (req, reply) => {
+    const u = requireUser(req, reply)
+    if (!u) return
+    const name = req.body?.name
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 30) {
+      return reply.code(400).send({ error: 'bad_request', message: '组合名称必填且 ≤30 字' })
+    }
+    const c = repo.updateCombo(req.params.id, u.login, {
+      name: name.trim(),
+      description: req.body?.description ?? '',
+      members: req.body?.members ?? [],
+    })
+    if (!c) return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
+    repo.log(u.login, 'combo.update', { id: c.id, members: c.members.length })
+    return c
   })
   app.delete<{ Params: { id: string } }>(`${API.createCombo}/:id`, async (req, reply) => {
     const u = requireUser(req, reply)
@@ -590,12 +611,27 @@ export async function registerRoutes(
     if (!requireAdmin(req, reply)) return
     return repo.getCombos()
   })
-  app.post<{ Body: { id: string; action: 'approve' | 'remove' } }>(API.adminCombos, async (req, reply) => {
+  app.post<{ Body: { id: string; action: 'approve' | 'remove' | 'publish' | 'unpublish' } }>(API.adminCombos, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { id, action } = req.body ?? {}
-    const c = repo.setComboStatus(id, action === 'approve' ? 'published' : 'removed')
+    // 兼容旧动作:approve=publish
+    const next = action === 'remove' ? 'removed' as const : action === 'unpublish' ? 'unpublished' as const : 'published' as const
+    const c = repo.setComboStatus(id, next)
     if (!c) return reply.code(404).send({ error: 'not_found' })
     repo.log('admin', `combo.${action}`, { id })
+    // 给组作者发私人公告（仅作者可见,客户端公告列表自动过滤）。
+    if (c.author_github) {
+      const label = next === 'published' ? '已发布' : next === 'unpublished' ? '已下架' : '已删除'
+      const a = repo.addAnnouncement({
+        version: '*',
+        level: 'info',
+        content: `管理员已将你的组合「${c.name}」${label}。${next === 'unpublished' ? '如需重新上架请联系管理员。' : ''}`,
+        user_id: c.author_github,
+      })
+      broadcast.publish('announcements', { id: a.id, version: a.version, user_id: a.user_id })
+    }
+    // 组合状态变化实时推送(客户端本地更新,无需重拉)。
+    broadcast.publish('combos', { id: c.id, status: c.status })
     return c
   })
 

@@ -57,14 +57,16 @@ export interface Repo {
   verifyAnonToken(token: string): boolean
   /** 安装/下载计数：匿名凭证 + 1h 窗口去重 + 按天聚合产出 downloads_7d。 */
   recordInstall(token: string, target: string): { ok: boolean; counted: boolean; downloads_7d: number }
-  createCombo(input: { name: string; description: string; members: string[]; author: string; authorGithub: string }): Combo
+  createCombo(input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>; author: string; authorGithub: string }): Combo
+  /** 作者编辑自己的组合（名称/描述/成员）；不存在或非作者返回 null。 */
+  updateCombo(id: string, login: string, input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }> }): Combo | null
   /** 用户删除自己的组合（仅作者本人；返回是否删除成功）。 */
   removeCombo(id: string, login: string): boolean
   setComboStatus(id: string, status: Combo['status']): Combo | null
   /** 注销账号（v3.6 U2）：删除账号/点赞/云端清单；组合按选择删除或匿名保留（作者显示"已注销用户"）。 */
   deactivateUser(userId: string, login: string, combos: 'delete' | 'anonymize'): { ok: boolean; deleted: { likes: number; installs: number; combos: number } }
   replaceInstalls(userId: string, list: Array<{ target: string; type: 'plugin' | 'combo'; version: string }>): CloudInstall[]
-  addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string }): Announcement
+  addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string; user_id?: string | null }): Announcement
   removeAnnouncement(id: string): boolean
   addReport(input: { pkg: string; repo_url: string | null; version: string }): StoredReport
   resolveReport(id: number, status: 'included' | 'invalid' | 'rejected'): StoredReport | null

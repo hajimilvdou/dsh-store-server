@@ -82,13 +82,18 @@ export interface Plugin {
 
 /* ---------------- 组合 ---------------- */
 
-export type ComboStatus = 'pending' | 'published' | 'removed'
+export type ComboStatus = 'pending' | 'published' | 'unpublished' | 'removed'
+
+/** 组合成员安装方式：auto=一键直接装；manual=手动安装（打开插件页面自行安装）。 */
+export type InstallMode = 'auto' | 'manual'
 
 export interface ComboMember {
   /** 包名（弱引用）。 */
   pkg: string
   /** 锁定的版本；'*' = 跟随最新。 */
   version: string
+  /** 安装方式（创建/编辑时选择；缺省 auto）。 */
+  install_mode: InstallMode
 }
 
 export interface Combo {
@@ -145,6 +150,8 @@ export interface Announcement {
   published_at: string
   /** 发布服务器（LB 集群内公告按源分标签）。 */
   origin_server: string
+  /** 私人公告目标用户 login；null = 全站公告（管理端对组合执行发布/下架/删除时提醒作者）。 */
+  user_id?: string | null
   /** 管理端展示用。 */
   read_rate?: number
 }

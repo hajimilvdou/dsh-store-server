@@ -1,4 +1,4 @@
-import type { Announcement, Combo, Plugin, StarSnapshot, User } from '../shared/models.js'
+import type { Announcement, Combo, ComboMember, Plugin, StarSnapshot, User } from '../shared/models.js'
 import type { Delta, NodeInfo } from '../shared/protocol.js'
 import { DEFAULT_CONFIG, type ServerConfig } from '../shared/config.js'
 import type { AuditEntry, CloudInstall, FedMessage, FedRelation, StoredLike, StoredReport, StoredRiskLike, UpdateState } from './data.js'
@@ -186,7 +186,7 @@ export class MemoryRepo implements Repo {
       slug: name,
       name,
       description,
-      members: members.map((pkg) => ({ pkg, version: '*' })),
+      members: members.map((pkg) => ({ pkg, version: '*', install_mode: 'auto' as const })),
       author,
       author_github: author,
       likes,
@@ -291,13 +291,22 @@ export class MemoryRepo implements Repo {
 
   /* ---------------- combos ---------------- */
 
-  createCombo(input: { name: string; description: string; members: string[]; author: string; authorGithub: string }): Combo {
+  /** 兼容两种成员形态：字符串包名（全 auto）或 {pkg, install_mode} 对象。 */
+  private static normMembers(members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>): ComboMember[] {
+    return members.map((m) =>
+      typeof m === 'string'
+        ? { pkg: m, version: '*', install_mode: 'auto' as const }
+        : { pkg: String(m.pkg), version: '*', install_mode: m.install_mode === 'manual' ? 'manual' as const : 'auto' as const },
+    )
+  }
+
+  createCombo(input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>; author: string; authorGithub: string }): Combo {
     const combo: Combo = {
       id: `store.example.com:combo_${Date.now()}`,
       slug: input.name,
       name: input.name,
       description: input.description,
-      members: input.members.map((pkg) => ({ pkg, version: '*' })),
+      members: MemoryRepo.normMembers(input.members),
       author: input.author,
       author_github: input.authorGithub,
       likes: 0,
@@ -310,6 +319,20 @@ export class MemoryRepo implements Repo {
     this.combos.push(combo)
     this.combosRevision++
     return combo
+  }
+
+  /** 作者编辑组合（名称/描述/成员）；返回更新后的组合；不存在或非作者返回 null。 */
+  updateCombo(id: string, login: string, input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }> }): Combo | null {
+    const c = this.combos.find((x) => x.id === id && x.author === login)
+    if (!c) return null
+    c.name = input.name
+    c.slug = input.name
+    c.description = input.description
+    c.members = MemoryRepo.normMembers(input.members)
+    c.version++
+    c.updated_at = new Date().toISOString()
+    this.combosRevision++
+    return c
   }
 
   removeCombo(id: string, login: string): boolean {
@@ -331,7 +354,7 @@ export class MemoryRepo implements Repo {
 
   /* ---------------- announcements ---------------- */
 
-  addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string }): Announcement {
+  addAnnouncement(input: { version: string; level: 'info' | 'important'; content: string; user_id?: string | null }): Announcement {
     const a: Announcement = {
       id: `ann_${Date.now()}`,
       version: input.version,
@@ -339,6 +362,7 @@ export class MemoryRepo implements Repo {
       content: input.content,
       published_at: new Date().toISOString().slice(0, 10),
       origin_server: '官方源',
+      user_id: input.user_id ?? null,
     }
     this.announcements.unshift(a)
     return a

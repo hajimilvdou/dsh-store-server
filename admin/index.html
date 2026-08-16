@@ -573,15 +573,44 @@ RENDER.combos = async () => {
   const combos = await api('/admin/combos')
   const pending = combos.filter((c) => c.status === 'pending')
   const rest = combos.filter((c) => c.status !== 'pending')
-  const row = (c, actions) => `<tr><td><b>${esc(c.name)}</b><br><span style="color:var(--tx2);font-size:11px">${esc(c.description)}</span></td><td>${esc(c.author)}</td><td>${c.members.length}</td><td>${c.status === 'published' ? '<span class="pill ok">已发布</span>' : c.status === 'removed' ? '<span class="pill ba">已下架</span>' : '<span class="pill wa">待审</span>'}</td><td>${actions}</td></tr>`
-  return `<div class="a-title">🗂 组合审核</div>
+  const statusPill = (s) => s === 'published' ? '<span class="pill ok">已发布</span>' : s === 'unpublished' ? '<span class="pill ba">已下架</span>' : s === 'removed' ? '<span class="pill ba">已删除</span>' : '<span class="pill wa">待审核</span>'
+  const row = (c) => {
+    const modeTxt = c.members.filter((m) => m.install_mode === 'manual').length
+    const authorGithub = c.author_github ? `<span style="color:var(--tx2);font-size:11px">@${esc(c.author_github)}</span>` : ''
+    const actions = c.status === 'published'
+      ? `<button class="abtn dan" onclick="comboAction('${c.id}','unpublish')">下架</button> <button class="abtn dan" onclick="comboAction('${c.id}','remove')">删除</button>`
+      : c.status === 'unpublished'
+        ? `<button class="abtn pri" onclick="comboAction('${c.id}','publish')">发布</button> <button class="abtn dan" onclick="comboAction('${c.id}','remove')">删除</button>`
+        : c.status === 'removed'
+          ? `<button class="abtn pri" onclick="comboAction('${c.id}','publish')">恢复发布</button>`
+          : `<button class="abtn pri" onclick="comboAction('${c.id}','publish')">通过</button> <button class="abtn dan" onclick="comboAction('${c.id}','remove')">删除</button>`
+    return `<tr>
+      <td style="max-width:220px"><b>${esc(c.name)}</b><br><span style="color:var(--tx2);font-size:11px;word-break:break-all">${esc(c.description || '—')}</span></td>
+      <td>${esc(c.author)}<br>${authorGithub}</td>
+      <td>${c.members.length}${modeTxt > 0 ? `<br><span style="color:var(--gold);font-size:11px">✋手动 ${modeTxt}</span>` : ''}</td>
+      <td>❤ ${c.likes}<br><span style="color:var(--tx2);font-size:11px">下载 ${c.downloads_7d}</span></td>
+      <td>${statusPill(c.status)}</td>
+      <td style="font-size:11px;color:var(--tx2)">v${c.version}<br>${esc((c.updated_at || '').slice(0, 10))}</td>
+      <td><button class="abtn" onclick="toggleComboDetail('${c.id}')">展开 ▾</button> ${actions}</td>
+    </tr>
+    <tr id="cdetail-${c.id}" style="display:none"><td colspan="7" style="background:var(--bg2)">
+      <div style="font-size:12px;line-height:1.8">
+        <div><b>ID：</b>${esc(c.id)}</div>
+        <div><b>来源：</b>${esc(c.origin_server)} · <b>状态：</b>${statusPill(c.status)} · <b>作者 GitHub：</b>${esc(c.author_github || '—')}</div>
+        <div><b>成员明细：</b></div>
+        ${c.members.map((m) => `<div style="margin-left:14px;padding:2px 0;border-bottom:1px dashed var(--line)"><span>${esc(m.pkg)}</span> <span style="color:var(--tx2)">v${esc(m.version)}</span> ${m.install_mode === 'manual' ? '<span class="pill wa">✋ 手动安装</span>' : '<span class="pill ok">⚡ 一键安装</span>'}</div>`).join('') || '<div style="margin-left:14px;color:var(--tx2)">（空组合）</div>'}
+        <div style="margin-top:6px;color:var(--tx2)">操作后自动向作者 @${esc(c.author_github || c.author)} 发送私人公告提醒。</div>
+      </div>
+    </td></tr>`
+  }
+  return `<div class="a-title">🗂 组合管理 <small>发布 / 下架 / 删除均自动私信作者</small></div>
   <div class="a-card"><h4>待审核（${pending.length}）</h4><table>
-    <tr><th>组合</th><th>作者</th><th>插件数</th><th>状态</th><th>操作</th></tr>
-    ${pending.map((c) => row(c, `<button class="abtn pri" onclick="comboAction('${c.id}','approve')">通过</button> <button class="abtn dan" onclick="comboAction('${c.id}','remove')">下架</button>`)).join('') || '<tr><td colspan="5" style="color:var(--tx2)">无待审核组合</td></tr>'}
+    <tr><th>组合</th><th>作者</th><th>插件</th><th>点赞/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
+    ${pending.map(row).join('') || '<tr><td colspan="7" style="color:var(--tx2)">无待审核组合</td></tr>'}
   </table></div>
-  <div class="a-card"><h4>全部组合</h4><table>
-    <tr><th>组合</th><th>作者</th><th>插件数</th><th>状态</th><th>操作</th></tr>
-    ${rest.map((c) => row(c, c.status === 'published' ? `<button class="abtn dan" onclick="comboAction('${c.id}','remove')">下架</button>` : `<button class="abtn pri" onclick="comboAction('${c.id}','approve')">恢复</button>`)).join('')}
+  <div class="a-card"><h4>全部组合（${rest.length}）</h4><table>
+    <tr><th>组合</th><th>作者</th><th>插件</th><th>点赞/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
+    ${rest.map(row).join('') || '<tr><td colspan="7" style="color:var(--tx2)">暂无组合</td></tr>'}
   </table></div>`
 }
 
@@ -777,6 +806,10 @@ const runUpdate = async () => {
 const block = (pkg) => act(async () => { await post('/admin/blocklist', { pkg }); page('plugins') }, null, '')
 const unblock = (pkg) => act(async () => { await del(`/admin/blocklist/${pkg}`); page('plugins') }, null, '')
 const comboAction = (id, action) => act(async () => { await post('/admin/combos', { id, action }); page('combos') }, null, '')
+function toggleComboDetail(id) {
+  const el = document.getElementById('cdetail-' + id)
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none'
+}
 const userAction = (id, banned) => act(async () => { await post('/admin/users', { id, banned }); page('users') }, null, '')
 const fastTrack = () => act(async () => { const p = await post('/admin/fast-track', { repo_url: document.getElementById('ftUrl').value }); flash('ftMsg', `已收录：${p.id}（安全分 ${p.security.score}，风险标签 ${p.security.risk_tags.length} 个）`) }, 'ftMsg', '')
 const riskAction = (id, action) => act(async () => { await post('/admin/risk-queue', { id, action }); page('sec') }, 'riskMsg', action === 'include' ? '已计入该点赞（进入排行）' : '已清除该点赞')
