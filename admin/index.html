@@ -741,9 +741,13 @@ RENDER.cfg = async () => {
   <div class="a-card"><h4>🔎 GitHub 库同步</h4><div class="cfg">
     <div class="ci wide"><span class="lab">搜索 token（classic PAT，一行一个，可填多枚轮换；留空回落到环境变量 GITHUB_TOKENS）</span><textarea data-path="sync.github_tokens" data-kind="tokens" rows="4" placeholder="ghp_xxx...">${tokens.map(esc).join('\n')}</textarea>${sv()}</div>
     ${num('抓取间隔（小时）', 'sync.github_fetch_interval_h', cfg.sync.github_fetch_interval_h)}
-    ${num('插件数据心跳（分钟）', 'sync.data_heartbeat_min', cfg.sync.data_heartbeat_min)}
-    ${num('组数据刷新（分钟）', 'sync.combos_refresh_min', cfg.sync.combos_refresh_min)}
     ${num('搜索收录上限（0=服务器默认全量）', 'sync.max_repos', cfg.sync.max_repos)}
+  </div></div>
+
+  <div class="a-card"><h4>📡 客户端更新频率</h4><div class="cfg">
+    ${num('组合/数据更新间隔（分钟）', 'sync.data_heartbeat_min', cfg.sync.data_heartbeat_min)}
+    ${num('组合刷新间隔（分钟）', 'sync.combos_refresh_min', cfg.sync.combos_refresh_min)}
+    <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">客户端（插件商城面板）按「组合/数据更新间隔」周期心跳拉取插件与组合，改动保存后即时下发；默认 30 分钟，调小更实时、调大更省流量</span></div>
   </div></div>
 
   <div class="a-card"><h4>🏆 榜单与排序</h4><div class="cfg">
