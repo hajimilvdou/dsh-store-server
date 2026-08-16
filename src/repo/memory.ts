@@ -694,7 +694,10 @@ export class MemoryRepo implements Repo {
       }
     }
     this.combosRevision++
-    this.users = this.users.filter((u) => u.id !== userId)
+    // 墓碑：不物理删除用户行,置 deactivated。否则 JWT 仍有效时 currentUser 懒注册
+    // 会把注销用户重新注册为 active（复活漏洞）；保留行也便于管理端审计注销记录。
+    const u = this.users.find((x) => x.id === userId)
+    if (u) u.status = 'deactivated'
     return { ok: true, deleted: { likes: myLikes.length, installs: myInstalls.length, combos: mine.length } }
   }
 

@@ -99,8 +99,17 @@ export class PgRepo extends MemoryRepo {
     return repo
   }
 
+  /** 写穿串行队列：严格按调用顺序落库。
+   *  关键：同一请求内 registerUser(INSERT users) 必须先于 replaceInstalls
+   *  (INSERT user_installs,外键 REFERENCES users(id)) 等依赖用户行的写操作，
+   *  并发 fire-and-forget 会让 installs 先到 → 外键违反 → 云端清单静默丢失。
+   *  失败仅记日志,不阻塞队列后续写。 */
+  private writeQueue: Promise<void> = Promise.resolve()
   private fire(sql: string, params: unknown[] = []): void {
-    void this.pool.query(sql, params).catch((e) => console.error('[pg] 写穿失败:', e instanceof Error ? e.message : e))
+    this.writeQueue = this.writeQueue
+      .then(() => this.pool.query(sql, params))
+      .then(() => undefined)
+      .catch((e) => console.error('[pg] 写穿失败:', e instanceof Error ? e.message : e))
   }
 
   private async kvGet<T>(key: string, fallback: T): Promise<T> {
@@ -341,7 +350,8 @@ export class PgRepo extends MemoryRepo {
     const r = super.deactivateUser(userId, login, combos)
     this.fire('DELETE FROM likes WHERE user_id = $1', [userId])
     this.fire('DELETE FROM user_installs WHERE user_id = $1', [userId])
-    this.fire('DELETE FROM users WHERE id = $1', [userId])
+    // 墓碑：保留 users 行置 deactivated（防 currentUser 懒注册复活 + 审计可见）
+    this.fire("UPDATE users SET status = 'deactivated' WHERE id = $1", [userId])
     if (combos === 'delete') this.fire('DELETE FROM combos WHERE author_id = $1', [login])
     else this.fire('UPDATE combos SET author_name = $1, author_id = NULL WHERE author_id = $2', ['已注销用户', login])
     this.kvSet('combos_revision', this.combosRevision)

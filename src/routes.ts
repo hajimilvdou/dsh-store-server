@@ -57,7 +57,9 @@ export async function registerRoutes(
       if (real) {
         // 懒注册兜底：修复前已持有有效 JWT 的用户（未走 /auth/callback）首次请求时补录，
         // 管理端用户管理页才能看到全部真实用户。幂等：已存在则不产生任何写。
-        repo.registerUser({ login: real.login, name: real.name, githubId: real.githubId, homeServer: homeOf(req) })
+        // 封禁/注销即时生效：status !== active 拒绝访问（JWT 本身不吊销,靠状态位拦截）。
+        const u = repo.registerUser({ login: real.login, name: real.name, githubId: real.githubId, homeServer: homeOf(req) })
+        if (u.status !== 'active') return null
         return { userId: `u_${real.login}`, login: real.login }
       }
       if (demoMode) {
