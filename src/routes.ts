@@ -506,7 +506,7 @@ export async function registerRoutes(
     if (!requireAdmin(req, reply)) return
     const users = repo.getUsers()
     const today = new Date().toISOString().slice(0, 10)
-    const todayNewUsers = users.filter((u) => (u.registered_at ?? '').slice(0, 10) === today).length
+    const todayNewUsers = users.filter((u) => String(u.registered_at ?? '').slice(0, 10) === today).length
     return {
       plugins_total: repo.countPlugins(),
       plugins_blocked: repo.countBlocked(),

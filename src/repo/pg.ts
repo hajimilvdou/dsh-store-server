@@ -61,7 +61,7 @@ function rowToPlugin(r: PluginRow): Plugin {
     is_new: r.is_new,
     security: { level: r.security_level as 0 | 1 | 2 | 3, score: r.security_score, risk_tags: r.risk_tags as RiskTag[], blocked: r.blocked },
     status: r.status,
-    updated_at: r.updated_at,
+    updated_at: dstr(r.updated_at),
   }
 }
 
@@ -74,6 +74,17 @@ function pluginToRow(p: Plugin): unknown[] {
     p.is_new,
     p.security.level, p.security.score, JSON.stringify(p.security.risk_tags), p.security.blocked, p.status, p.updated_at,
   ]
+}
+
+/**
+ * PG 时间列统一转字符串：node-postgres 默认把 TIMESTAMPTZ 解析为 JS Date 对象，
+ * 而内存模型把时间字段标注为 string（管理端/admin 路由直接 .slice(0,10) 等）。
+ * 不转换会在 hydrate 后触发 "(...).slice is not a function"（曾导致管理端登录验证 500）。
+ */
+function dstr(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (v instanceof Date) return v.toISOString()
+  return String(v ?? '')
 }
 
 const PLUGIN_COLS = 'id, kind, preset_name, version, name, description, repo, repo_url, source, stars, stars_delta_day, stars_delta_7d, trending_rank, likes, downloads_7d, quality_score, tags, compat, author, install, is_new, security_level, security_score, risk_tags, blocked, status, updated_at'
@@ -151,45 +162,45 @@ export class PgRepo extends MemoryRepo {
       status: c.status,
       origin_server: c.origin_server,
       version: c.version,
-      updated_at: c.updated_at,
+      updated_at: dstr(c.updated_at),
     }))
 
     // 存量下载量折算进当日聚合基线，避免重启后事件重算清零
     this.baselineDailyDownloads()
 
     const { rows: aRows } = await this.pool.query('SELECT * FROM announcements ORDER BY published_at DESC')
-    this.announcements = (aRows as Announcement[]).map((a) => ({ ...a }))
+    this.announcements = (aRows as Array<Announcement & { published_at: unknown }>).map((a) => ({ ...a, published_at: dstr(a.published_at) }))
 
     const { rows: lRows } = await this.pool.query('SELECT * FROM likes')
-    this.likes = (lRows as Array<{ user_id: string; target: string; created_at: string }>).map((l) => ({ user_id: l.user_id, target: l.target, at: l.created_at }))
+    this.likes = (lRows as Array<{ user_id: string; target: string; created_at: unknown }>).map((l) => ({ user_id: l.user_id, target: l.target, at: dstr(l.created_at) }))
 
     const { rows: uRows } = await this.pool.query('SELECT * FROM users')
-    this.users = (uRows as Array<{ id: string; github_id: number; login: string; name: string | null; home_server: string; status: User['status']; registered_at: string }>).map((u) => ({
+    this.users = (uRows as Array<{ id: string; github_id: number; login: string; name: string | null; home_server: string; status: User['status']; registered_at: unknown }>).map((u) => ({
       id: u.id,
       github_id: u.github_id,
       login: u.login,
       name: u.name,
       home_server: u.home_server,
       status: u.status,
-      registered_at: u.registered_at,
+      registered_at: dstr(u.registered_at),
       combo_count: this.combos.filter((c) => c.author === u.login && c.status !== 'removed').length,
     }))
 
     const { rows: iRows } = await this.pool.query('SELECT * FROM user_installs')
-    this.installs = (iRows as Array<{ user_id: string; target: string; type: 'plugin' | 'combo'; version: string; source_combo_id: string | null; at: string }>).map((i) => ({ ...i }))
+    this.installs = (iRows as Array<{ user_id: string; target: string; type: 'plugin' | 'combo'; version: string; source_combo_id: string | null; at: unknown }>).map((i) => ({ ...i, at: dstr(i.at) }))
 
     const { rows: rRows } = await this.pool.query('SELECT * FROM reports ORDER BY id')
-    this.reports = (rRows as StoredReport[]).map((r) => ({ ...r }))
+    this.reports = (rRows as Array<StoredReport & { created_at: unknown }>).map((r) => ({ ...r, created_at: dstr(r.created_at) }))
 
     const { rows: kRows } = await this.pool.query('SELECT * FROM risk_likes ORDER BY id')
-    this.riskQueue = (kRows as Array<{ id: number; user_id: string; login: string; target: string; ip: string; reason: string; status: StoredRiskLike['status']; created_at: string }>).map((r) => ({ id: r.id, user_id: r.user_id, login: r.login, target: r.target, ip: r.ip, reason: r.reason, status: r.status, at: r.created_at }))
+    this.riskQueue = (kRows as Array<{ id: number; user_id: string; login: string; target: string; ip: string; reason: string; status: StoredRiskLike['status']; created_at: unknown }>).map((r) => ({ id: r.id, user_id: r.user_id, login: r.login, target: r.target, ip: r.ip, reason: r.reason, status: r.status, at: dstr(r.created_at) }))
     this.riskSeq = this.riskQueue.reduce((m, r) => Math.max(m, r.id), 0)
 
     const { rows: fRows } = await this.pool.query('SELECT * FROM federation_relations')
-    this.fedRelations = (fRows as Array<{ id: string; peer_url: string; status: FedRelation['status']; share: Record<string, string>; mode: 'snapshot' | 'realtime'; created_at: string }>).map((f) => ({ id: f.id, peer_url: f.peer_url, status: f.status, share: f.share, mode: f.mode, rtt_ms: null, created_at: f.created_at }))
+    this.fedRelations = (fRows as Array<{ id: string; peer_url: string; status: FedRelation['status']; share: Record<string, string>; mode: 'snapshot' | 'realtime'; created_at: unknown }>).map((f) => ({ id: f.id, peer_url: f.peer_url, status: f.status, share: f.share, mode: f.mode, rtt_ms: null, created_at: dstr(f.created_at) }))
 
     const { rows: msgRows } = await this.pool.query('SELECT * FROM federation_messages ORDER BY id')
-    this.fedMessages = (msgRows as FedMessage[]).map((m) => ({ ...m }))
+    this.fedMessages = (msgRows as Array<FedMessage & { created_at: unknown }>).map((m) => ({ ...m, created_at: dstr(m.created_at) }))
 
     const { rows: sRows } = await this.pool.query('SELECT * FROM star_snapshots')
     this.starSnapshots = (sRows as Array<{ repo: string; date: string; stars: number }>).map((s) => ({ repo: s.repo, date: String(s.date).slice(0, 10), stars: s.stars }))

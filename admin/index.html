@@ -375,14 +375,14 @@ RENDER.sec = async () => {
     <td>${esc(r.target)}</td>
     <td style="font-size:11.5px">${esc(r.reason)}</td>
     <td style="font-size:11.5px">${esc(r.ip)}</td>
-    <td style="font-size:11.5px">${esc((r.at || '').slice(0, 16).replace('T', ' '))}</td>
+    <td style="font-size:11.5px">${esc(String(r.at || '').slice(0, 16).replace('T', ' '))}</td>
     <td>${r.status === 'pending'
       ? `<button class="abtn pri" onclick="riskAction(${r.id},'include')">✓ 计入</button> <button class="abtn dan" onclick="riskAction(${r.id},'reject')">✕ 清除</button>`
       : r.status === 'included' ? '<span class="pill ok">已计入</span>' : '<span class="pill ba">已清除</span>'}</td>
   </tr>`).join('')
     : '<tr><td colspan="6" style="color:var(--tx2)">风控队列为空</td></tr>'
   const today = new Date().toISOString().slice(0, 10)
-  const todayNew = users.filter((u) => (u.registered_at || '').slice(0, 10) === today).length
+  const todayNew = users.filter((u) => String(u.registered_at || '').slice(0, 10) === today).length
   const apiErr = health.api_error_rate == null ? '—' : health.api_error_rate + '%'
   const diskText = health.disk.used_gb == null ? '—' : `${health.disk.used_gb} GB / ${health.disk.total_gb} GB（${health.disk.pct}%）`
   const diskPill = health.disk.pct == null ? '<span class="pill ok">正常</span>' : health.disk.pct >= 90 ? '<span class="pill ba">告急</span>' : health.disk.pct >= 80 ? '<span class="pill wa">偏高</span>' : '<span class="pill ok">充足</span>'
@@ -590,7 +590,7 @@ RENDER.combos = async () => {
       <td>${c.members.length}${modeTxt > 0 ? `<br><span style="color:var(--gold);font-size:11px">✋手动 ${modeTxt}</span>` : ''}</td>
       <td>❤ ${c.likes}<br><span style="color:var(--tx2);font-size:11px">下载 ${c.downloads_7d}</span></td>
       <td>${statusPill(c.status)}</td>
-      <td style="font-size:11px;color:var(--tx2)">v${c.version}<br>${esc((c.updated_at || '').slice(0, 10))}</td>
+      <td style="font-size:11px;color:var(--tx2)">v${c.version}<br>${esc(String(c.updated_at || '').slice(0, 10))}</td>
       <td><button class="abtn" onclick="toggleComboDetail('${c.id}')">展开 ▾</button> ${actions}</td>
     </tr>
     <tr id="cdetail-${c.id}" style="display:none"><td colspan="7" style="background:var(--bg2)">
@@ -619,7 +619,7 @@ RENDER.users = async () => {
   return `<div class="a-title">👥 用户管理 <small>（仅 GitHub 登录 · 不采集头像）</small></div>
   <div class="a-card"><table>
     <tr><th>用户名</th><th>姓名</th><th>注册时间</th><th>组合数</th><th>状态</th><th>操作</th></tr>
-    ${users.map((u) => `<tr><td>${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td>${esc(u.registered_at.slice(0, 10))}</td><td>${u.combo_count}/3</td><td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill ba">已禁用</span>'}</td><td>${u.status === 'active' ? `<button class="abtn dan" onclick="userAction('${u.id}',true)">禁用</button>` : `<button class="abtn pri" onclick="userAction('${u.id}',false)">恢复</button>`}</td></tr>`).join('')}
+    ${users.map((u) => `<tr><td>${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td>${esc(String(u.registered_at || '').slice(0, 10))}</td><td>${u.combo_count}/3</td><td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill ba">已禁用</span>'}</td><td>${u.status === 'active' ? `<button class="abtn dan" onclick="userAction('${u.id}',true)">禁用</button>` : `<button class="abtn pri" onclick="userAction('${u.id}',false)">恢复</button>`}</td></tr>`).join('')}
   </table></div>`
 }
 
