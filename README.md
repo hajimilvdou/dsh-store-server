@@ -120,6 +120,49 @@ docker compose up -d            # 自动拉镜像（失败自动回退本地构�
 
 密钥不在部署时必填：搜索 token（可多枚）、OAuth、JWT、管理员密码、注册开关等均可在管理端「**配置中心**」修改（每项独立保存、保存即热更新；JWT 更换后全员重新登录）。
 
+---
+
+## 使用说明
+
+### 1. 获取 GitHub 搜索 token（同步插件库必需）
+
+插件库的自动收录依赖 GitHub Search API，需要一枚 **classic PAT**：
+
+1. 打开 GitHub → 右上角头像 → **Settings** → 左侧 **Developer settings** → **Personal access tokens** → **Tokens (classic)**；
+2. 点 **Generate new token (classic)**，Note 随意（如 `dsh-store-sync`），有效期自选；
+   - 权限（Scopes）：**只需公开库搜索，全部不勾选即可**（Search API 认证请求即可获得 30 次/分钟额度；如提示权限不足可勾选 `public_repo`）；
+3. 生成后**立即复制**（只显示一次），形如 `ghp_xxxxxxxxxxxxxxxxxxxx`；
+4. 填入本服务端（二选一）：
+   - **管理端 → 配置中心 → 搜索 token**（一行一枚，可填多枚自动轮换，保存即热更新），或
+   - 环境变量 `GITHUB_TOKENS`（逗号分隔多枚）；
+5. 保存后同步自动启用：`SYNC_TOPIC` 默认为 `dsh-plugin`（只收录打了该 topic 的仓库），管理端可随时「▶ 立即抓取」。
+
+> 未配置搜索 token 时：同步与登录功能休眠，其余（浏览/下载计数/管理端）不受影响。
+
+### 2. 登录配置（用户 GitHub 登录）
+
+1. GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**：
+   - Homepage URL：你的服务器地址；
+   - **Authorization callback URL：必须与管理端配置的 `OAUTH_CALLBACK_URL` 完全一致**（默认按请求 host 拼接，反代/域名场景需显式设置）；
+2. 拿到 **Client ID / Client Secret**，连同自拟的 **JWT_SECRET**（签名密钥，≥16 位随机串）填入管理端配置中心（或环境变量）；
+3. 保存即生效（JWT 更换后全员重新登录）。
+
+配置完成后，用户在客户端「我的」页点「立即登录 GitHub」→ 新窗口完成授权 → **token 自动回传并存到本地**，全程无需复制粘贴。
+
+### 3. 管理端登录（管理员）
+
+- **首次使用**：打开 `http://<服务器>:8080/admin` → 进入「首次使用 · 设置管理员密码」流程（≥8 位，先到先得）→ 之后用该密码登录；
+- 也可部署时用环境变量 `ADMIN_TOKEN` 预置口令；生产环境两者皆未配置时管理端整体 503（防后门）；
+- 登录后 token（`X-Admin-Token`）自动保存在浏览器本地（`dshs_admin_token`），下次打开免输入；
+- 管理端登录口令与用户登录（OAuth）完全独立，互不影响。
+
+### 4. 客户端登录 token 在哪
+
+- 用户登录 token 由 OAuth 授权后**自动回传**，保存在客户端浏览器本地存储（`dsh_store_token`），**不需要手动获取或粘贴**；
+- 换电脑/换环境：重新打开商城「我的」→ 登录一次即可，云端组合/订阅/安装记录自动拉回；
+- 未登录也能浏览、搜索、安装插件（数据通道开放）；登录仅用于云端同步与社区功能（发布插件/组合、订阅、点赞）；
+- 纯离线演示模式（未配置 OAuth 且未配置搜索 token）下，接受 `Authorization: Bearer mock-liwei` / `mock-xiaoyu` 演示账号。
+
 ### GitHub Actions 构建 → 服务器直接拉取
 
 `.github/workflows/docker-build.yml` 自动构建镜像并推送到 **GHCR**（`ghcr.io/<owner>/<repo>`，无需任何 Secrets）。服务器上无需构建：
