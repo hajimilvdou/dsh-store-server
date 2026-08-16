@@ -106,6 +106,8 @@ export interface Combo {
   /** 展示名；注销用户显示"已注销用户"。 */
   author: string
   author_github: string | null
+  /** 本站订阅数(全站订阅该组合的用户数,替代本站点赞；数据通道下发)。 */
+  subscribers?: number
   likes: number
   downloads_7d: number
   status: ComboStatus

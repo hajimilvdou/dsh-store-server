@@ -20,6 +20,8 @@ export interface Repo {
   installsOf(userId: string): CloudInstall[]
   /** 全部用户的云端安装清单(联邦 users 导出用)。 */
   installsOfAll(): CloudInstall[]
+  /** 组合订阅数：全站用户安装清单中订阅该组合的去重用户数。 */
+  comboSubscribers(name: string): number
   getFedRelations(): FedRelation[]
   getFedMessages(): FedMessage[]
   getBlocklist(): string[]

@@ -169,7 +169,7 @@ export async function registerRoutes(
   })
 
   /* ================= GitHub OAuth（未配置凭据时 503 休眠） ================= */
-  app.get<{ Querystring: { redirect?: string } }>('/auth/login', async (req, reply) => {
+  app.get<{ Querystring: { redirect?: string } }>('/auth/login', async (_req, reply) => {
     const regCfg = repo.getConfig()
     if (!regCfg.user.registration_enabled) {
       return reply.code(503).send({ error: 'registration_closed', message: '注册已关闭（管理端配置中心可开启）' })
@@ -181,10 +181,11 @@ export async function registerRoutes(
       return reply.code(503).send({ error: 'not_configured', message: '未配置 GitHub OAuth 凭据（Client ID/Secret/JWT 密钥），可在管理端配置中心填写' })
     }
     // 回调地址必须与 GitHub OAuth App 注册的 callback URL 完全一致：
-    // 优先 OAUTH_CALLBACK_URL 显式配置；否则强制 https + 请求 host。
-    // ⚠ 不能使用 req.protocol：反代(nginx/caddy)内部转发时 protocol 可能是 http,
-    // 拼出的 redirect_uri 与 GitHub 登记不一致 → "The redirect_uri is not associated" 报错。
-    const base = process.env.OAUTH_CALLBACK_URL ?? `https://${req.headers.host ?? 'blog.1qwq1.top'}`
+    // 优先 OAUTH_CALLBACK_URL 显式配置；否则固定使用官方域名(用户登记的
+    // 回调地址为 https://blog.1qwq1.top/auth/callback)。
+    // ⚠ 不能依赖 req.protocol / req.headers.host：反代内部转发时两者都可能
+    // 与 GitHub 登记的地址不一致 → "The redirect_uri is not associated"。
+    const base = process.env.OAUTH_CALLBACK_URL ?? 'https://blog.1qwq1.top'
     const state = auth.newState()
     return reply.redirect(auth.authorizeUrl(`${base}/auth/callback`, state))
   })
@@ -293,7 +294,12 @@ export async function registerRoutes(
     if (kind === 'agent' || kind === 'preset') return { ...delta, items: delta.items.filter((p) => p.kind === 'preset') }
     return delta
   })
-  app.get<{ Querystring: { since?: string } }>(API.combos, async (req): Promise<Delta<Combo>> => repo.combosDelta(req.query.since))
+  app.get<{ Querystring: { since?: string } }>(API.combos, async (req): Promise<Delta<Combo>> => {
+    // 组合数据通道：注入订阅数(全站订阅该组的去重用户数,替代本站点赞)。
+    // 组合更新不实时推送(省服务器资源),客户端按 data_heartbeat_min 周期拉取。
+    const delta = repo.combosDelta(req.query.since)
+    return { ...delta, items: delta.items.map((c) => ({ ...c, subscribers: repo.comboSubscribers(c.name) })) }
+  })
   app.get(API.announcements, async (req): Promise<Announcement[]> => {
     // 私人公告（user_id 非空）仅对目标用户可见；匿名/未登录只看全站公告。
     const me = currentUser(req)
@@ -409,8 +415,6 @@ export async function registerRoutes(
       combo.status = 'published'
     }
     repo.log(u.login, 'combo.create', { id: combo.id, members: combo.members.length, status: combo.status })
-    // 实时推送：其他在线客户端立即看到新组合（SSE → 增量拉取）。
-    broadcast.publish('combos', { id: combo.id, status: combo.status })
     return combo
   })
   /* ================= 编辑组合（登录；仅作者本人） ================= */
@@ -428,8 +432,6 @@ export async function registerRoutes(
     })
     if (!c) return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
     repo.log(u.login, 'combo.update', { id: c.id, members: c.members.length })
-    // 实时推送：订阅者/浏览者立即看到更新后的成员与描述（SSE → 增量拉取）。
-    broadcast.publish('combos', { id: c.id, status: c.status })
     return c
   })
   app.delete<{ Params: { id: string } }>(`${API.createCombo}/:id`, async (req, reply) => {
@@ -439,8 +441,6 @@ export async function registerRoutes(
       return reply.code(404).send({ error: 'not_found', message: '组合不存在或不是你的组合' })
     }
     repo.log(u.login, 'combo.remove', { id: req.params.id })
-    // 实时推送：其他客户端立即移除该组合（SSE → 增量拉取,增量含 tombstones）。
-    broadcast.publish('combos', { id: req.params.id, removed: true })
     return { ok: true, combos: repo.getCombos() }
   })
 
@@ -655,7 +655,8 @@ export async function registerRoutes(
 
   app.get(API.adminCombos, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return repo.getCombos()
+    // 注入订阅数(替代本站点赞,组合页显示"订阅/下载")
+    return repo.getCombos().map((c) => ({ ...c, subscribers: repo.comboSubscribers(c.name) }))
   })
   app.post<{ Body: { id: string; action: 'approve' | 'remove' | 'publish' | 'unpublish' } }>(API.adminCombos, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
@@ -676,8 +677,7 @@ export async function registerRoutes(
       })
       broadcast.publish('announcements', { id: a.id, version: a.version, user_id: a.user_id })
     }
-    // 组合状态变化实时推送(客户端本地更新,无需重拉)。
-    broadcast.publish('combos', { id: c.id, status: c.status })
+    // 组合状态变化不再实时推送(省服务器资源)：客户端按 data_heartbeat_min 周期拉取。
     return c
   })
 

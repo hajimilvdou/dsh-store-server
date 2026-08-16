@@ -635,6 +635,10 @@ export class MemoryRepo implements Repo {
   installsOfAll(): CloudInstall[] {
     return this.installs.map((i) => ({ ...i }))
   }
+  /** 组合订阅数：全站用户安装清单中 type=combo 且 target=组合名 的去重用户数。 */
+  comboSubscribers(name: string): number {
+    return new Set(this.installs.filter((i) => i.type === 'combo' && i.target === name).map((i) => i.user_id)).size
+  }
   getFedRelations(): FedRelation[] {
     return this.fedRelations
   }

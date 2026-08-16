@@ -623,7 +623,7 @@ RENDER.combos = async () => {
       <td style="max-width:220px"><b>${esc(c.name)}</b><br><span style="color:var(--tx2);font-size:11px;word-break:break-all">${esc(c.description || '—')}</span></td>
       <td>${esc(c.author)}<br>${authorGithub}</td>
       <td>${c.members.length}${modeTxt > 0 ? `<br><span style="color:var(--gold);font-size:11px">✋手动 ${modeTxt}</span>` : ''}</td>
-      <td>❤ ${c.likes}<br><span style="color:var(--tx2);font-size:11px">下载 ${c.downloads_7d}</span></td>
+      <td>👥 ${c.subscribers ?? 0} 订阅<br><span style="color:var(--tx2);font-size:11px">下载 ${c.downloads_7d}</span></td>
       <td>${statusPill(c.status)}</td>
       <td style="font-size:11px;color:var(--tx2)">v${c.version}<br>${esc(String(c.updated_at || '').slice(0, 10))}</td>
       <td><button class="abtn" onclick="toggleComboDetail('${c.id}')">展开 ▾</button> ${actions}</td>
@@ -641,11 +641,11 @@ RENDER.combos = async () => {
   return `<div class="a-title">🗂 组合管理 <small>发布 / 下架 / 删除均自动私信作者</small></div>
   ${reviewEnabled ? '' : `<div class="msgbox" style="border-left-color:var(--gold);margin-bottom:12px">⚡ 插件组审核已关闭：用户发布直接实时上线,无需审核。如需开启请<a href="javascript:page('config')" style="color:var(--gold);text-decoration:underline">前往配置中心 → 插件组审核</a>。</div>`}
   <div class="a-card"><h4>待审核（${pending.length}）</h4><table>
-    <tr><th>组合</th><th>作者</th><th>插件</th><th>点赞/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
+    <tr><th>组合</th><th>作者</th><th>插件</th><th>订阅/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
     ${pending.map(row).join('') || '<tr><td colspan="7" style="color:var(--tx2)">无待审核组合</td></tr>'}
   </table></div>
   <div class="a-card"><h4>全部组合（${rest.length}）</h4><table>
-    <tr><th>组合</th><th>作者</th><th>插件</th><th>点赞/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
+    <tr><th>组合</th><th>作者</th><th>插件</th><th>订阅/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
     ${rest.map(row).join('') || '<tr><td colspan="7" style="color:var(--tx2)">暂无组合</td></tr>'}
   </table></div>`
 }
@@ -697,8 +697,10 @@ RENDER.cfg = async () => {
   const sv = () => `<button class="sv" type="button" onclick="saveField(event)">保存</button>`
   const num = (label, path, val) => `<div class="ci"><span class="lab">${label}</span><input data-path="${path}" data-kind="number" value="${esc(String(val))}">${sv()}</div>`
   const text = (label, path, val, ph = '', wide = false) => `<div class="ci${wide ? ' wide' : ''}"><span class="lab">${label}</span><input class="${wide ? 'wide' : ''}" data-path="${path}" value="${esc(String(val))}" placeholder="${ph}">${sv()}</div>`
-  const pass = (label, path, ph) => `<div class="ci wide"><span class="lab">${label}</span><input class="wide" type="password" data-path="${path}" data-kind="password" placeholder="${ph}">${sv()}</div>`
-  const passOpt = (label, path, ph) => `<div class="ci wide"><span class="lab">${label}</span><input class="wide" type="password" data-path="${path}" data-kind="password-optional" placeholder="${ph}">${sv()}</div>`
+  // 密码类：不回填真实值(安全隐藏机制),但按是否已配置显示徽标,避免"明明填了却显示空白"的困惑
+  const passState = (v) => (v ? '<span class="pill ok" style="margin-left:6px">已配置</span>' : '<span class="pill wa" style="margin-left:6px">未配置</span>')
+  const pass = (label, path, ph, val) => `<div class="ci wide"><span class="lab">${label}${passState(val)}</span><input class="wide" type="password" data-path="${path}" data-kind="password" placeholder="${ph}">${sv()}</div>`
+  const passOpt = (label, path, ph, val) => `<div class="ci wide"><span class="lab">${label}${passState(val)}</span><input class="wide" type="password" data-path="${path}" data-kind="password-optional" placeholder="${ph}">${sv()}</div>`
   const sel = (label, path, cur, opts) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}">${opts.map(([v, t]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
   const bool = (label, path, cur) => `<div class="ci"><span class="lab">${label}</span><select data-path="${path}" data-kind="bool">${[['1', '开'], ['0', '关']].map(([v, t]) => `<option value="${v}" ${(cur ? '1' : '0') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>${sv()}</div>`
   const tokens = cfg.sync.github_tokens || []
@@ -708,18 +710,18 @@ RENDER.cfg = async () => {
 
   <div class="a-card"><h4>🧾 认证凭证 <small>（GitHub 登录 = OAuth 应用；修改后即时生效，JWT 密钥更换后全员需重新登录）</small></h4><div class="cfg">
     ${text('OAuth Client ID', 'auth.github_client_id', cfg.auth.github_client_id, '留空则回落到部署环境变量', true)}
-    ${pass('OAuth Client Secret', 'auth.github_client_secret', '输入新值后点保存；留空不修改（回落环境变量）')}
-    ${pass('JWT 签名密钥', 'auth.jwt_secret', '输入新值后点保存；留空不修改（回落环境变量）')}
+    ${pass('OAuth Client Secret', 'auth.github_client_secret', '输入新值后点保存；留空不修改（回落环境变量）', cfg.auth.github_client_secret)}
+    ${pass('JWT 签名密钥', 'auth.jwt_secret', '输入新值后点保存；留空不修改（回落环境变量）', cfg.auth.jwt_secret)}
   </div></div>
 
   <div class="a-card"><h4>🔐 管理员</h4><div class="cfg">
-    ${pass('管理页面访问密码', 'admin.password', '输入新值后点保存；留空不修改（回落环境变量 ADMIN_TOKEN）')}
+    ${pass('管理页面访问密码', 'admin.password', '输入新值后点保存；留空不修改（回落环境变量 ADMIN_TOKEN）', cfg.admin.password)}
     <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">改密后旧密码立即失效，请用新密码重新进入；生产环境未设置时管理端不可用</span></div>
   </div></div>
 
   <div class="a-card"><h4>🔗 服务器源与联邦</h4><div class="cfg">
-    ${passOpt('源服务器连接密码', 'server.access_password', '留空 = 客户端连接本源无需密码（回落环境变量 ACCESS_PASSWORD）')}
-    ${passOpt('联邦密码', 'federation.secret', '留空 = 未配置，服务器间联邦不可用（回落环境变量 FEDERATION_SECRET）')}
+    ${passOpt('源服务器连接密码', 'server.access_password', '留空 = 客户端连接本源无需密码（回落环境变量 ACCESS_PASSWORD）', cfg.server.access_password)}
+    ${passOpt('联邦密码', 'federation.secret', '留空 = 未配置，服务器间联邦不可用（回落环境变量 FEDERATION_SECRET）', cfg.federation.secret)}
     ${bool('联邦（服务器间）', 'federation.enabled', cfg.federation.enabled)}
     ${num('联邦数据同步间隔（小时）', 'federation.sync_interval_h', cfg.federation.sync_interval_h)}
     <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">源连接密码用于客户端加源；联邦密码用于服务器间握手，两者独立。清空输入并保存 = 关闭对应校验</span></div>
