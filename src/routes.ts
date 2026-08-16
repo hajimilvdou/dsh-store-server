@@ -334,7 +334,9 @@ export async function registerRoutes(
    * 广播型数据推送（点赞数/公告/插件库变更）：EventSource 直连，跨源需 CORS 头。
    * 事件格式：event: <type>\ndata: <json>\n\n；30s 心跳注释保活。
    */
-  app.get(API.events, async (_req, reply) => {
+  // SSE 事件流：compress: false 排除全局压缩（流式推送不能被压缩缓冲破坏；
+  // 另因 reply.hijack() 原始流直写，压缩钩子本就不介入，双保险）。
+  app.get(API.events, { compress: false }, async (_req, reply) => {
     reply.hijack()
     const raw = reply.raw
     raw.writeHead(200, {

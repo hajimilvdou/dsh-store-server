@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import compress from '@fastify/compress'
 import { readFileSync, rmSync } from 'node:fs'
 import { loadEnvFile } from './env.js'
 import { SOFTWARE_NAME } from './shared/index.js'
@@ -162,6 +163,14 @@ const app = Fastify({
   logger: true,
   // 生产级安全（v3 §10）：限制 JSON 体积防滥用
   bodyLimit: 1_048_576,
+})
+
+// 全局响应压缩（gzip/deflate/brotli 自动协商，≥1KB 才压）：
+// 插件库全量可达 2.7MB，压缩后 ~10% 体积，首次同步/增量拉取显著提速。
+// SSE 事件流在路由级排除（见 routes.ts events 路由 compress: false）。
+await app.register(compress, {
+  global: true,
+  threshold: 1024,
 })
 
 const updater = new UpdateService(repo)
