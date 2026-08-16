@@ -259,7 +259,7 @@ export class PgRepo extends MemoryRepo {
         this.pool
           .query(
             `INSERT INTO plugins (${PLUGIN_COLS}) VALUES (${PLUGIN_PLACEHOLDERS})
-             ON CONFLICT (id) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, stars_delta_7d = EXCLUDED.stars_delta_7d, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
+             ON CONFLICT (repo) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, stars_delta_7d = EXCLUDED.stars_delta_7d, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
             pluginToRow(p),
           )
           .then(() => undefined)
@@ -299,7 +299,7 @@ export class PgRepo extends MemoryRepo {
 
   override applyLikeCount(target: string, count: number): void {
     super.applyLikeCount(target, count)
-    this.fire('UPDATE plugins SET likes = $1 WHERE id = $2', [count, target])
+    this.fire('UPDATE plugins SET likes = $1 WHERE repo = $2', [count, target])
     this.fire('UPDATE combos SET likes = $1 WHERE id = $2', [count, target])
   }
 

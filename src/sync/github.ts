@@ -445,6 +445,8 @@ export class GithubSync {
       const plugin = existing ?? (await this.extractPlugin(repo.full_name))
       if (!plugin) continue
       if (!existing) {
+        // 唯一键 = repo(owner/repo)：不同作者的同名插件(同 id 不同 repo)可同时收录，
+        // 不做按 id 去重(那会误删同名插件)；repo 天然全局唯一。
         target.plugins.push(plugin)
         changed++
         this.updateProgress({ changed })
