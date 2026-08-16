@@ -4,6 +4,7 @@
   "description": "DSH 插件商城服务端（独立仓库）：GitHub 同步、REST API、联邦互联、管理端",
   "type": "module",
   "main": "./dist/index.js",
+  "license": "CC-BY-NC-SA-4.0",
   "engines": {
     "node": ">=20"
   },
