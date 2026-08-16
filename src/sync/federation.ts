@@ -35,18 +35,22 @@ export class FedSync {
     private readonly getConfig: () => ServerConfig,
   ) {}
 
-  /** 拉取对端一类数据(带本服联邦密码)。 */
+  /** 拉取对端一类数据(携带关系上互换保存的对方联邦密码)。 */
   private async fetchPeer(rel: FedRelation, kind: FedSyncKind): Promise<unknown[]> {
     const cfg = this.getConfig().federation
     if (!cfg.enabled || !cfg.secret) throw new Error('本服未开启联邦或未配置联邦密码')
+    const peerSecret = String(rel.share?.peer_secret ?? '')
+    if (!peerSecret) throw new Error('缺少对方联邦密码(邀请时互换,尚未保存)')
     const url = rel.peer_url.replace(/\/+$/, '') + '/api/v1/federation/sync?kind=' + encodeURIComponent(kind)
     const res = await fetch(url, {
-      headers: { 'X-Federation-Secret': cfg.secret, 'User-Agent': 'dsh-store-server' },
+      headers: { 'X-Federation-Secret': peerSecret, 'User-Agent': 'dsh-store-server' },
       signal: AbortSignal.timeout(60000),
     })
     if (!res.ok) throw new Error(`对端返回 HTTP ${res.status}`)
-    const body = (await res.json()) as { items?: unknown[] }
-    return body.items ?? []
+    const body = (await res.json()) as { items?: unknown }
+    const items = body.items
+    if (!Array.isArray(items)) return items !== undefined ? [items] : []
+    return items
   }
 
   /** 同步一个关系的全部已选类别；失败记录到 share.error 并在管理端可见。 */
@@ -94,10 +98,12 @@ export class FedSync {
   async notifyPeer(rel: FedRelation, body: string): Promise<void> {
     const cfg = this.getConfig().federation
     if (!cfg.enabled || !cfg.secret) return
+    const peerSecret = String(rel.share?.peer_secret ?? '')
+    if (!peerSecret) return
     try {
-      await fetch(rel.peer_url.replace(/\/+$/, '') + '/api/v1/federation/message', {
+      await fetch(rel.peer_url.replace(/\/+$/, '') + '/federation/message', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Federation-Secret': cfg.secret, 'User-Agent': 'dsh-store-server' },
+        headers: { 'Content-Type': 'application/json', 'X-Federation-Secret': peerSecret, 'User-Agent': 'dsh-store-server' },
         body: JSON.stringify({ relation_id: 'system', body }),
         signal: AbortSignal.timeout(15000),
       })

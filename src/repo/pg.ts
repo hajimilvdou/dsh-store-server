@@ -497,7 +497,8 @@ export class PgRepo extends MemoryRepo {
 
   override mergeFedCombos(peerUrl: string, list: Combo[]): void {
     super.mergeFedCombos(peerUrl, list)
-    // 组合写穿：镜像组合也落库(联邦组合与本地组合同表,id 天然带来源域名)
+    // 组合写穿：先删该对端旧镜像(与内存语义一致,删除同步才成立),再 upsert 新快照
+    this.fire('DELETE FROM combos WHERE origin_server = $1', [peerUrl])
     for (const c of list) {
       this.fire('INSERT INTO combos (id, slug, name, description, author_id, author_name, likes, downloads_7d, status, origin_server, version, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, likes = EXCLUDED.likes, downloads_7d = EXCLUDED.downloads_7d, status = EXCLUDED.status, origin_server = EXCLUDED.origin_server, updated_at = EXCLUDED.updated_at', [c.id, c.slug, c.name, c.description, c.author_github, c.author, c.likes, c.downloads_7d, c.status, c.origin_server, c.version, c.updated_at])
       for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version, install_mode) VALUES ($1,$2,$3,$4) ON CONFLICT (combo_id, pkg) DO UPDATE SET version = EXCLUDED.version, install_mode = EXCLUDED.install_mode', [c.id, m.pkg, m.version, m.install_mode === 'manual' ? 'manual' : 'auto'])

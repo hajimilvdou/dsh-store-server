@@ -30,6 +30,23 @@ interface AuthUser {
   login: string
 }
 
+/** 深合并：patch 中的嵌套对象与 base 对应键递归合并,数组/标量直接替换。 */
+function deepMerge<T>(base: T, patch: unknown): T {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return (patch === undefined ? base : patch) as T
+  }
+  const out = (Array.isArray(base) ? [...(base as unknown[])] : { ...(base as object) }) as Record<string, unknown>
+  for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+    const bv = (base as Record<string, unknown>)[k]
+    if (v && typeof v === 'object' && !Array.isArray(v) && bv && typeof bv === 'object' && !Array.isArray(bv)) {
+      out[k] = deepMerge(bv, v)
+    } else {
+      out[k] = v
+    }
+  }
+  return out as T
+}
+
 /**
  * 路由注册。仓库面向 Repo 接口：无凭据阶段用 MemoryRepo，DATABASE_URL 就绪后换 PgRepo。
  * 认证：配置 OAuth 凭据后为真实 GitHub OAuth JWT；仅纯离线演示模式（无 OAuth 且无 GitHub token）
@@ -109,7 +126,8 @@ export async function registerRoutes(
     const expected = repo.getConfig().server.access_password
     if (!expected) return
     const path = req.url.split('?')[0]
-    const isClientData = path === '/health' || (path.startsWith('/api/v1/') && !path.startsWith('/api/v1/federation/'))
+    // SSE(EventSource)无法携带自定义请求头 → /api/v1/events 移出密码校验,保持匿名广播流
+    const isClientData = path === '/health' || (path.startsWith('/api/v1/') && !path.startsWith('/api/v1/federation/') && path !== '/api/v1/events')
     if (!isClientData) return
     if (req.headers['x-access-password'] !== expected) {
       runtime.blockedRequests++
@@ -206,7 +224,11 @@ export async function registerRoutes(
     if (!user) return reply.code(401).send({ error: 'unauthorized', message: 'GitHub 授权失败' })
     // 注册/更新用户（幂等）：OAuth 登录即落库，管理端用户管理页由此获得真实用户列表。
     // 注册时间只记首次（已存在用户仅刷新资料，不改 registered_at）。
-    repo.registerUser({ login: user.login, name: user.name, githubId: user.githubId, homeServer: homeOf(req) })
+    const u = repo.registerUser({ login: user.login, name: user.name, githubId: user.githubId, homeServer: homeOf(req) })
+    // 封禁/注销用户：不签发 JWT,授权页直接提示(避免"授权成功但一切请求 401"的假象)。
+    if (u.status !== 'active') {
+      return reply.code(403).send({ error: 'account_not_active', message: `账号当前状态为「${u.status === 'banned' ? '已封禁' : '已注销'}」，无法登录` })
+    }
     repo.log('auth', 'register', { login: user.login, github_id: user.githubId })
     const token = auth.issueToken(user)
     // 授权完成页：自动把 token postMessage 回传给 opener(客户端商城窗口)，无需手动复制粘贴。
@@ -362,6 +384,10 @@ export async function registerRoutes(
 
   /* ================= 点赞（登录；疑似刷赞进风控队列） ================= */
   app.post<{ Body: { target: string; value?: 1 | -1 } }>(API.like, async (req, reply) => {
+    // 功能开关真实门控：客户端 UI 已移除点赞入口,此处防止旧客户端/直连继续写入。
+    if (!cfg.feature.likes) {
+      return reply.code(403).send({ error: 'feature_disabled', message: '点赞功能已关闭（GitHub 星数即社区认可）' })
+    }
     const u = requireUser(req, reply)
     if (!u) return
     const target = req.body?.target
@@ -378,6 +404,7 @@ export async function registerRoutes(
     }
     const res = repo.toggleLike(u.userId, target)
     repo.applyLikeCount(target, res.count)
+
     // 实时推送点赞变化(客户端据此本地更新计数,无需重拉)。
     broadcast.publish('likes', { target, likes: res.count, liked: res.liked })
     return { target, likes: res.count, liked: res.liked }
@@ -385,6 +412,7 @@ export async function registerRoutes(
 
   /* ================= 查询我的点赞（登录；客户端初始化已赞状态用） ================= */
   app.get(API.meLikes, async (req, reply): Promise<string[]> => {
+    if (!cfg.feature.likes) return []
     const u = requireUser(req, reply)
     if (!u) return []
     return repo.getUserLikes(u.userId)
@@ -492,7 +520,7 @@ export async function registerRoutes(
   })
 
   /* ================= 联邦（服务器间） ================= */
-  app.post<{ Body: { from_url: string; share?: Record<string, unknown>; mode?: 'snapshot' | 'realtime'; kinds?: string[] } }>(API.federationHandshake, async (req, reply) => {
+  app.post<{ Body: { from_url: string; share?: Record<string, unknown>; mode?: 'snapshot' | 'realtime'; kinds?: string[]; peer_secret?: string } }>(API.federationHandshake, async (req, reply) => {
     if (!requireFederation(req, reply)) return
     const fromUrl = req.body?.from_url
     if (typeof fromUrl !== 'string' || !fromUrl.trim()) {
@@ -501,9 +529,14 @@ export async function registerRoutes(
     const r = repo.addFedRelation({ peer_url: fromUrl.trim(), mode: req.body?.mode ?? 'snapshot' })
     // 对方选择的同步类别(缺省全部)存进关系 share,接受后按此同步
     const kinds = Array.isArray(req.body?.kinds) ? (req.body.kinds as string[]).filter((k) => FED_KINDS.includes(k as FedSyncKind)) : []
-    if (kinds.length) repo.updateFedShare(r.id, { kinds: kinds.join(',') })
+    // 联邦密码互换：握手请求携带发起方密码(对方存为 peer_secret 用于拉取本服),
+    // 本服密码也返回给发起方兜底。请求头校验仍用本服密码。
+    const fed = repo.getConfig().federation
+    const patch: Record<string, string> = { peer_secret: typeof req.body?.peer_secret === 'string' ? req.body.peer_secret : '' }
+    if (kinds.length) patch.kinds = kinds.join(',')
+    repo.updateFedShare(r.id, patch)
     repo.log('admin', 'federation.handshake', { peer: fromUrl, kinds })
-    return { ok: true, message: '邀请已发送，等待对方接受', id: r.id }
+    return { ok: true, message: '邀请已发送，等待对方接受', id: r.id, peer_secret: fed.secret || '' }
   })
   /** 联邦数据同步导出：对端按类别拉取本服快照(需联邦密码)。 */
   app.get<{ Querystring: { kind?: string } }>('/api/v1/federation/sync', async (req, reply) => {
@@ -768,7 +801,9 @@ export async function registerRoutes(
   app.put<{ Body: Partial<ServerConfig> }>(API.adminConfig, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const prevTokens = [...(repo.getConfig().sync.github_tokens ?? [])].map((t) => String(t).trim()).filter(Boolean)
-    const next = { ...repo.getConfig(), ...(req.body ?? {}) } as ServerConfig
+    // 深合并：第三方直接 PUT 部分对象(如仅 {user:{combo_limit:5}})时不丢同级的其余字段
+    const merged = deepMerge(repo.getConfig(), req.body ?? {}) as ServerConfig
+    const next = { ...merged } as ServerConfig
     // 适配：token 池去空去重；注册方式白名单（当前仅 github）；管理员口令不可置空（回落环境变量防锁死）
     next.sync.github_tokens = [...new Set((next.sync.github_tokens ?? []).map((t) => String(t).trim()).filter(Boolean))]
     if (!next.user.registration_methods?.length) next.user.registration_methods = ['github']
@@ -782,6 +817,8 @@ export async function registerRoutes(
     // ⚠ 关键：同步闭包快照 cfg —— 接口层(manifest/createCombo 等)读取的是 cfg 引用,
     // 不同步会导致"管理端改了配置、用户端/接口不生效"(如插件组审核开关)。
     Object.assign(cfg, next)
+    // 告警 webhook 热更新(AlertService 支持运行时切换,不再需要重启)
+    alerts.setWebhook(String(next.alert?.webhook ?? ''))
     // 密钥即时热更新：同步 token 池、OAuth/JWT、管理端口令全部生效
     sync.setTokens(next.sync.github_tokens)
     sync.setMaxRepos(next.sync.max_repos)
@@ -817,10 +854,19 @@ export async function registerRoutes(
   app.get(API.adminFederation, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const fed = repo.getConfig().federation
+    // 已同步镜像统计(插件/Agent/用户写入 federation_data 供管理端查看)
+    const mirrors: Array<{ peer: string; kind: string; count: number }> = []
+    for (const rel of repo.getFedRelations()) {
+      for (const kind of FED_KINDS) {
+        const d = repo.getFedData(rel.peer_url, kind)
+        if (Array.isArray(d)) mirrors.push({ peer: rel.peer_url, kind, count: d.length })
+      }
+    }
     return {
       relations: repo.getFedRelations(),
       messages: repo.getFedMessages(),
-      config: { enabled: fed.enabled, secret_configured: !!fed.secret },
+      mirrors,
+      config: { enabled: fed.enabled, secret_configured: !!fed.secret, sync_interval_h: fed.sync_interval_h },
     }
   })
   // 管理端「发送邀请」：本服务器代表管理员向对方服务器发起握手（携带对方联邦密码 + 选择同步类别），
@@ -835,11 +881,12 @@ export async function registerRoutes(
     // 本机对外地址：OAuth 场景同样依赖反代/域名的显式配置，优先 OAUTH_CALLBACK_URL。
     const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
     const peer = peerUrl.replace(/\/+$/, '')
+    const selfFed = repo.getConfig().federation
     try {
       const res = await fetch(`${peer}/api/v1/federation/handshake`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Federation-Secret': secret, 'User-Agent': 'dsh-store-server' },
-        body: JSON.stringify({ from_url: self, mode: req.body?.mode ?? 'snapshot', kinds }),
+        body: JSON.stringify({ from_url: self, mode: req.body?.mode ?? 'snapshot', kinds, peer_secret: selfFed.secret || '' }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null
@@ -849,9 +896,11 @@ export async function registerRoutes(
       return reply.code(502).send({ error: 'peer_unreachable', message: '无法访问对方服务器：请确认地址可公网访问、且对方已开启联邦并配置联邦密码' })
     }
     const r = repo.addFedRelation({ peer_url: peer, mode: req.body?.mode ?? 'snapshot' })
-    repo.updateFedShare(r.id, { kinds: kinds.join(',') })
+    // 对方联邦密码存为本关系 peer_secret(后续拉取/通知对方使用)
+    const patch: Record<string, string> = { kinds: kinds.join(','), peer_secret: secret }
+    repo.updateFedShare(r.id, patch)
     repo.log('admin', 'federation.invite', { peer, kinds })
-    return { ok: true, message: '邀请已发送，等待对方管理员接受', id: r.id }
+    return { ok: true, message: '邀请已发送，等待对方管理员接受', id: r.id, peer_secret: selfFed.secret || '' }
   })
   app.post<{ Body: { id: string; action: 'accept' | 'reject' | 'disconnect' } }>(API.adminFederation, async (req, reply) => {
     if (!requireAdmin(req, reply)) return

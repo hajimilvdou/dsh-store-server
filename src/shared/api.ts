@@ -103,7 +103,8 @@ export interface DownloadResponse {
 export interface CreateComboRequest {
   name: string
   description: string
-  members: { pkg: string; version: string }[]
+  /** 兼容两种形态：旧客户端传包名字符串数组（全 auto）；新客户端传 {pkg, install_mode} 对象数组。 */
+  members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>
 }
 
 export interface ReportMissingRequest {

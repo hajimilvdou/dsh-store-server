@@ -301,9 +301,12 @@ export class MemoryRepo implements Repo {
   }
 
   createCombo(input: { name: string; description: string; members: Array<string | { pkg: string; install_mode?: 'auto' | 'manual' }>; author: string; authorGithub: string }): Combo {
+    // 联邦身份：id 前缀与 origin_server 使用本服对外地址(server.public_url),
+    // 保证不同服务器组合 id 天然隔离、mergeFedCombos 的来源匹配与删除同步成立。
+    const origin = (this.config.server.public_url || 'https://blog.1qwq1.top').replace(/\/+$/, '')
     // id 加随机后缀：同一毫秒创建多个组合时避免主键冲突
     const combo: Combo = {
-      id: `store.example.com:combo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      id: `${origin}:combo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       slug: input.name,
       name: input.name,
       description: input.description,
@@ -313,7 +316,7 @@ export class MemoryRepo implements Repo {
       likes: 0,
       downloads_7d: 0,
       status: 'pending',
-      origin_server: 'store.example.com',
+      origin_server: origin,
       version: 1,
       updated_at: new Date().toISOString(),
     }

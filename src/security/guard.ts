@@ -4,8 +4,16 @@ import { RateLimiter } from './ratelimit.js'
 /** 同类告警去抖发送（飞书/钉钉通用 text 格式；其他通道后续按 webhook 类型配置）。 */
 export class AlertService {
   private lastSent = new Map<string, number>()
+  private webhookUrl: string
 
-  constructor(private readonly webhookUrl: string) {}
+  constructor(webhookUrl: string) {
+    this.webhookUrl = webhookUrl
+  }
+
+  /** 配置中心保存告警地址后热更新(不再需要重启)。 */
+  setWebhook(url: string): void {
+    this.webhookUrl = url ?? ''
+  }
 
   get enabled(): boolean {
     return !!this.webhookUrl

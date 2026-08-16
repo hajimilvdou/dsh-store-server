@@ -462,6 +462,7 @@ RENDER.fed = async () => {
   </tr>`
   }).join('')
   const msgs = (fed.messages || []).slice(0, 20).map((m) => `<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:11.5px">${m.direction === 'in' ? '📥' : '📤'} ${esc(String(m.created_at || '').slice(0, 16).replace('T', ' '))} · ${esc(m.body)}</div>`).join('') || '<div style="color:var(--tx2);font-size:11.5px">暂无消息</div>'
+  const mirrorTxt = (fed.mirrors || []).map((m) => `<div style="padding:3px 0;font-size:11.5px;border-bottom:1px dashed var(--line)"><b>${esc(m.peer)}</b> · ${esc(kindLabel[m.kind] || m.kind)}：${m.count} 条</div>`).join('') || '<div style="color:var(--tx2);font-size:11.5px">暂无已同步镜像（插件/Agent/用户数据）</div>'
   const kindsCb = Object.entries(kindLabel).map(([k, t]) => `<label class="ck" style="margin-right:10px"><input type="checkbox" id="fedKind-${k}" checked>${t}</label>`).join('')
   return `<div class="a-title">🌐 联邦互联 <small>（发起方主动邀请，接收方审核接受 · 数据同步默认每 ${esc(local.sync_interval_h || 24)} 小时一轮，可手动触发）</small></div>
   <div class="a-card"><h4>＋ 发起联邦邀请（选择同步类别）</h4>
@@ -473,7 +474,8 @@ RENDER.fed = async () => {
     <tr><th>对方服务器</th><th>状态</th><th>同步类别</th><th>同步状态</th><th>模式</th><th>操作</th></tr>
     ${rows || '<tr><td colspan="6" style="color:var(--tx2)">暂无联邦关系</td></tr>'}
   </table></div>
-  <div class="a-card"><h4>联邦消息（含解除通知）</h4>${msgs}</div>`
+  <div class="a-card"><h4>联邦消息（含解除通知）</h4>${msgs}</div>
+  <div class="a-card"><h4>已同步镜像（插件/Agent/用户数据,组合已并入组合库）</h4>${mirrorTxt}</div>`
 }
 
 RENDER.upd = async () => {
@@ -741,15 +743,12 @@ RENDER.cfg = async () => {
     ${num('抓取间隔（小时）', 'sync.github_fetch_interval_h', cfg.sync.github_fetch_interval_h)}
     ${num('插件数据心跳（分钟）', 'sync.data_heartbeat_min', cfg.sync.data_heartbeat_min)}
     ${num('组数据刷新（分钟）', 'sync.combos_refresh_min', cfg.sync.combos_refresh_min)}
-    ${num('README 抓取上限（KB）', 'sync.readme_fetch_kb', cfg.sync.readme_fetch_kb)}
     ${num('搜索收录上限（0=服务器默认全量）', 'sync.max_repos', cfg.sync.max_repos)}
   </div></div>
 
   <div class="a-card"><h4>🏆 榜单与排序</h4><div class="cfg">
     ${num('趋势榜条数', 'trending.size', cfg.trending.size)}
     ${num('星数快照保留（天）', 'trending.snapshot_retention_days', cfg.trending.snapshot_retention_days)}
-    ${sel('默认排序', 'sort.default', cfg.sort.default, [['default', '综合'], ['stars', '星数'], ['likes', '赞数'], ['downloads', '近7天下载']])}
-    ${num('赞数时间衰减权重', 'rank.like_age_weight', cfg.rank.like_age_weight)}
   </div></div>
 
   <div class="a-card"><h4>🖥 界面与引导</h4><div class="cfg">
@@ -759,20 +758,18 @@ RENDER.cfg = async () => {
     ${num('窗口最大宽度（px）', 'ui.window_max.0', cfg.ui.window_max[0])}
     ${num('窗口最大高度（px）', 'ui.window_max.1', cfg.ui.window_max[1])}
     ${num('首启自动打开次数（地址模式）', 'onboarding.auto_open_times', cfg.onboarding.auto_open_times)}
-    ${bool('通知徽标', 'notify.badge_enabled', cfg.notify.badge_enabled)}
   </div></div>
 
   <div class="a-card"><h4>🎚 功能开关</h4><div class="cfg">
     ${bool('趋势榜', 'feature.trending', f.trending)}
-    ${bool('点赞', 'feature.likes', f.likes)}
+    ${bool('点赞（已下线,开关仅拦截旧客户端接口）', 'feature.likes', f.likes)}
     ${bool('组合', 'feature.combos', f.combos)}
     ${bool('公告', 'feature.announcements', f.announcements)}
   </div></div>
 
   <div class="a-card"><h4>🛡 安全与风控</h4><div class="cfg">
-    ${sel('安全扫描层', 'security.scan_level', String(cfg.security.scan_level), [['0', '0 · 仅元数据'], ['1', '1 · 包级静态'], ['2', '2 · 代码模式'], ['3', '3 · 动态沙箱']])}
+    ${text('告警 Webhook（飞书/钉钉 text 格式；留空=关闭告警）', 'alert.webhook', cfg.alert.webhook || '', 'https://open.feishu.cn/...', true)}
     ${num('匿名凭证有效期（秒）', 'anon.token_ttl', cfg.anon.token_ttl)}
-    ${num('举报频率限制', 'report.rate_limit', cfg.report.rate_limit)}
     ${num('风控 · 同 IP 账号数阈值', 'risk.like_same_ip_accounts', cfg.risk.like_same_ip_accounts)}
     ${num('风控 · 同 IP 窗口（分钟）', 'risk.like_same_ip_window_min', cfg.risk.like_same_ip_window_min)}
     ${num('风控 · 新账号窗口（分钟）', 'risk.like_new_account_min', cfg.risk.like_new_account_min)}
@@ -782,7 +779,6 @@ RENDER.cfg = async () => {
 
   <div class="a-card"><h4>✉️ 站内信与数据保留</h4><div class="cfg">
     ${num('站内信限长（字）', 'message.max_length', cfg.message.max_length)}
-    ${num('站内信频率限制', 'message.rate_limit', cfg.message.rate_limit)}
     ${num('还原点保留个数', 'restore.max_points', cfg.restore.max_points)}
     ${num('非必要数据保留（天，0=永久）', 'retention.raw_data_days', cfg.retention.raw_data_days)}
   </div></div>

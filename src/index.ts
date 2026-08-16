@@ -79,6 +79,10 @@ if (!boot.auth.jwt_secret) boot.auth.jwt_secret = process.env.JWT_SECRET ?? ''
 if (!boot.admin.password) boot.admin.password = process.env.ADMIN_TOKEN ?? (demo ? 'mock-admin' : '')
 if (!boot.user.registration_methods.length) boot.user.registration_methods = ['github']
 repo.setConfig(boot)
+// ⚠ 对齐配置引用：registerRoutes 闭包读取的 cfg 必须与仓库持久化配置一致,
+// 否则配置中心保存的值(如插件组审核开关)在进程重启后会回落到环境快照而失效。
+// 这里以仓库配置为准覆盖 env 快照;后续管理端保存由 PUT /admin/config 的 Object.assign 继续同步。
+Object.assign(config, repo.getConfig())
 
 /**
  * 容器热更新完成后，新容器启动时读取编排容器写入的结果标记，
@@ -200,24 +204,9 @@ scheduleSync()
 //   执行前检查：安全扫描进行中、或距上次 GitHub 同步完成不足 30 分钟 → 推迟 30 分钟重试。
 const fedSync = new FedSync(repo, () => repo.getConfig())
 let fedTimer: NodeJS.Timeout | null = null
+let fedFirstRound = true
 let lastGhSyncDoneAt = 0
 const COOLDOWN_MS = 30 * 60_000
-const scheduleFedSync = (): void => {
-  if (fedTimer) clearTimeout(fedTimer)
-  const hours = Math.max(1, repo.getConfig().federation.sync_interval_h)
-  fedTimer = setTimeout(() => {
-    fedTimer = null
-    const scanning = runtime.scanProgress?.running ?? false
-    const tooSoonAfterGh = Date.now() - lastGhSyncDoneAt < COOLDOWN_MS
-    if (scanning || tooSoonAfterGh) {
-      // 撞车预案：推迟 30 分钟再试,避免联邦拉取与扫描/GitHub 同步争抢带宽与连接池
-      console.log(`[fed] 检测到${scanning ? '安全扫描进行中' : 'GitHub 同步刚结束'}，联邦同步推迟 30 分钟`)
-      fedTimer = setTimeout(() => { fedTimer = null; void runFedSyncOnce() }, COOLDOWN_MS)
-      return
-    }
-    void runFedSyncOnce()
-  }, hours * 3600_000)
-}
 const runFedSyncOnce = async (): Promise<void> => {
   try {
     const results = await fedSync.runOnce()
@@ -227,8 +216,26 @@ const runFedSyncOnce = async (): Promise<void> => {
   } catch (e) {
     console.error('[fed] 联邦同步异常:', e instanceof Error ? e.message : e)
   } finally {
+    fedFirstRound = false
     scheduleFedSync()
   }
+}
+const scheduleFedSync = (): void => {
+  if (fedTimer) clearTimeout(fedTimer)
+  // 首轮不干等整个间隔：启动 10 分钟后执行一次(避开启动高峰期),之后按配置间隔。
+  const delay = fedFirstRound ? 10 * 60_000 : Math.max(1, repo.getConfig().federation.sync_interval_h) * 3600_000
+  fedTimer = setTimeout(() => {
+    fedTimer = null
+    const scanning = runtime.scanProgress?.running ?? false
+    const tooSoonAfterGh = Date.now() - lastGhSyncDoneAt < COOLDOWN_MS
+    if (scanning || tooSoonAfterGh) {
+      // 撞车预案：推迟 30 分钟再试；到点后复查条件(仍冲突则继续推迟),避免与扫描/GitHub 同步争抢。
+      console.log(`[fed] 检测到${scanning ? '安全扫描进行中' : 'GitHub 同步刚结束'}，联邦同步推迟 30 分钟`)
+      fedTimer = setTimeout(() => { fedTimer = null; void runFedSyncOnce() }, COOLDOWN_MS)
+      return
+    }
+    void runFedSyncOnce()
+  }, delay)
 }
 scheduleFedSync()
 

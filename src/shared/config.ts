@@ -118,6 +118,8 @@ export interface ServerConfig {
   server: {
     local_port: number
     access_password: string
+    /** 本服对外地址(组合联邦 id 前缀与 origin_server 来源,如 https://blog.1qwq1.top)。 */
+    public_url: string
   }
   ui: {
     default_theme: 'system' | 'light' | 'dark'
@@ -248,6 +250,7 @@ export const DEFAULT_CONFIG: ServerConfig = {
   server: {
     local_port: 0,
     access_password: '',
+    public_url: 'https://blog.1qwq1.top',
   },
   ui: {
     default_theme: 'system',
