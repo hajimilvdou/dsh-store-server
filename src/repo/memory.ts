@@ -632,6 +632,9 @@ export class MemoryRepo implements Repo {
   installsOf(userId: string): CloudInstall[] {
     return this.installs.filter((i) => i.user_id === userId)
   }
+  installsOfAll(): CloudInstall[] {
+    return this.installs.map((i) => ({ ...i }))
+  }
   getFedRelations(): FedRelation[] {
     return this.fedRelations
   }
@@ -666,7 +669,8 @@ export class MemoryRepo implements Repo {
     return this.users.length
   }
   countUserCombos(login: string): number {
-    return this.combos.filter((c) => c.author === login && c.status !== 'removed').length
+    // 软删(removed)的组合仍占配额：管理员删除后有 3 天恢复期,期间作者不能新建绕过;3 天后自动物理删除才释放。
+    return this.combos.filter((c) => c.author === login).length
   }
   topPlugin(): Plugin | null {
     return this.plugins[0] ?? null
@@ -781,8 +785,54 @@ export class MemoryRepo implements Repo {
     return r ?? null
   }
 
-  addFedMessage(input: { relation_id: string; body: string }): void {
-    this.fedMessages.push({ id: this.fedMessages.length + 1, relation_id: input.relation_id, direction: 'out', body: input.body, created_at: new Date().toISOString() })
+  addFedMessage(input: { relation_id: string; body: string; direction?: 'in' | 'out' }): void {
+    this.fedMessages.push({ id: this.fedMessages.length + 1, relation_id: input.relation_id, direction: input.direction === 'in' ? 'in' : 'out', body: input.body, created_at: new Date().toISOString() })
+  }
+
+  /* ---------------- 联邦数据同步（快照镜像 + 组合合并） ---------------- */
+
+  /** 清理超过宽限期仍未恢复的已删除组合(管理员 remove 后 3 天自动作废)。返回被清理项(用于通知作者)。 */
+  purgeExpiredCombos(graceHours: number): Array<{ id: string; name: string; author: string }> {
+    const cutoff = Date.now() - graceHours * 3600_000
+    const expired: Array<{ id: string; name: string; author: string }> = []
+    this.combos = this.combos.filter((c) => {
+      if (c.status === 'removed') {
+        const at = new Date(c.updated_at ?? '').getTime()
+        if (!Number.isNaN(at) && at < cutoff) {
+          expired.push({ id: c.id, name: c.name, author: c.author })
+          return false
+        }
+      }
+      return true
+    })
+    if (expired.length > 0) this.combosRevision++
+    return expired
+  }
+
+  private fedData = new Map<string, unknown[]>()
+
+  updateFedShare(id: string, patch: Record<string, string>): void {
+    const r = this.fedRelations.find((x) => x.id === id)
+    if (r) r.share = { ...r.share, ...patch }
+  }
+
+  getFedData(peerUrl: string, kind: string): unknown[] | null {
+    return this.fedData.get(`${peerUrl}|${kind}`) ?? null
+  }
+
+  setFedData(peerUrl: string, kind: string, payload: unknown[]): void {
+    this.fedData.set(`${peerUrl}|${kind}`, payload)
+  }
+
+  mergeFedCombos(peerUrl: string, list: Combo[]): void {
+    // 先移除该对端的旧镜像组合(来源匹配),再合并新快照,保证删除同步生效。
+    this.combos = this.combos.filter((c) => c.origin_server !== peerUrl)
+    for (const c of list) {
+      const idx = this.combos.findIndex((x) => x.id === c.id)
+      if (idx >= 0) this.combos[idx] = c
+      else this.combos.push(c)
+    }
+    this.combosRevision++
   }
 
   setUpdateState(state: UpdateState): void {

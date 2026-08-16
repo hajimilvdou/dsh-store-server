@@ -13,6 +13,7 @@ import { getPool, closeDb, dbEnabled } from './db/pool.js'
 import { registerRoutes } from './routes.js'
 import { AuthService } from './auth.js'
 import { GithubSync } from './sync/github.js'
+import { FedSync } from './sync/federation.js'
 import { AlertService, installGuards, type RuntimeState } from './security/guard.js'
 import { UpdateService, deployedVersionTag, normVersionTag } from './update.js'
 import { checkClockDrift } from './clock.js'
@@ -184,6 +185,8 @@ const scheduleSync = (): void => {
         await repo.persistSync()
       }
     })().finally(() => {
+      // 记录完成时刻：联邦同步调度据此错开(30 分钟冷却,避免撞车)
+      lastGhSyncDoneAt = Date.now()
       scheduleSync()
     })
   }, hours * 3600_000)
@@ -191,7 +194,66 @@ const scheduleSync = (): void => {
 const resetSyncSchedule = (): void => scheduleSync()
 scheduleSync()
 
-await registerRoutes(app, repo, config, auth, sync, alerts, runtime, updater, resetSyncSchedule)
+// 联邦数据同步调度（默认 24h 一轮,配置 federation.sync_interval_h 可调）：
+// 遍历全部已连接(connected)联邦关系,按各自选择的类别拉取对端快照。
+// ⚠ 预案：避开与 GitHub 收录同步、插件安全扫描撞车(都可能是小时级任务)——
+//   执行前检查：安全扫描进行中、或距上次 GitHub 同步完成不足 30 分钟 → 推迟 30 分钟重试。
+const fedSync = new FedSync(repo, () => repo.getConfig())
+let fedTimer: NodeJS.Timeout | null = null
+let lastGhSyncDoneAt = 0
+const COOLDOWN_MS = 30 * 60_000
+const scheduleFedSync = (): void => {
+  if (fedTimer) clearTimeout(fedTimer)
+  const hours = Math.max(1, repo.getConfig().federation.sync_interval_h)
+  fedTimer = setTimeout(() => {
+    fedTimer = null
+    const scanning = runtime.scanProgress?.running ?? false
+    const tooSoonAfterGh = Date.now() - lastGhSyncDoneAt < COOLDOWN_MS
+    if (scanning || tooSoonAfterGh) {
+      // 撞车预案：推迟 30 分钟再试,避免联邦拉取与扫描/GitHub 同步争抢带宽与连接池
+      console.log(`[fed] 检测到${scanning ? '安全扫描进行中' : 'GitHub 同步刚结束'}，联邦同步推迟 30 分钟`)
+      fedTimer = setTimeout(() => { fedTimer = null; void runFedSyncOnce() }, COOLDOWN_MS)
+      return
+    }
+    void runFedSyncOnce()
+  }, hours * 3600_000)
+}
+const runFedSyncOnce = async (): Promise<void> => {
+  try {
+    const results = await fedSync.runOnce()
+    for (const r of results) {
+      if (!r.ok) void alerts.send('联邦同步失败', `${r.peer}：${r.error ?? '未知错误'}`)
+    }
+  } catch (e) {
+    console.error('[fed] 联邦同步异常:', e instanceof Error ? e.message : e)
+  } finally {
+    scheduleFedSync()
+  }
+}
+scheduleFedSync()
+
+// 组合软删宽限清理（管理员删除后 3 天未恢复 → 作废删除 + 私人公告通知作者）：
+// 每 6 小时检查一次(与联邦同步同预案,避开扫描/GitHub 同步),宽限 72 小时。
+const COMBO_GRACE_H = 72
+setInterval(() => {
+  if (runtime.scanProgress?.running) return
+  try {
+    const expired = repo.purgeExpiredCombos(COMBO_GRACE_H)
+    for (const e of expired) {
+      repo.addAnnouncement({
+        version: '*',
+        level: 'important',
+        content: `你的组合「${e.name}」被管理员删除后 3 天内未恢复，现已作废删除。若仍需发布请重新创建。`,
+        user_id: e.author,
+      })
+      console.log(`[combos] 宽限到期作废删除: ${e.name} (作者 ${e.author})`)
+    }
+  } catch (e) {
+    console.error('[combos] 宽限清理异常:', e instanceof Error ? e.message : e)
+  }
+}, 6 * 3600_000)
+
+await registerRoutes(app, repo, config, auth, sync, fedSync, alerts, runtime, updater, resetSyncSchedule)
 
 // 时钟自检（v3.6 U5）：启动 + 每小时；>500ms 告警，>5s 拒签凭证（/auth/callback）
 const runClockCheck = async () => {

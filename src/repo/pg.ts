@@ -97,6 +97,8 @@ const PLUGIN_PLACEHOLDERS = Array.from({ length: 27 }, (_, i) => `$${i + 1}`).jo
  * TODO: 写穿改为 await 语义（接口方法 async 化）以获得严格写后读一致性。
  */
 export class PgRepo extends MemoryRepo {
+  /** 联邦同步镜像缓存(键 peer|kind,启动时从 federation_data 表加载)。 */
+  private fedDataCache = new Map<string, unknown[]>()
   private constructor(
     private readonly pool: pg.Pool,
     seedDemo: boolean,
@@ -204,6 +206,16 @@ export class PgRepo extends MemoryRepo {
 
     const { rows: sRows } = await this.pool.query('SELECT * FROM star_snapshots')
     this.starSnapshots = (sRows as Array<{ repo: string; date: string; stars: number }>).map((s) => ({ repo: s.repo, date: String(s.date).slice(0, 10), stars: s.stars }))
+
+    // 联邦同步镜像加载
+    try {
+      const { rows: fdRows } = await this.pool.query('SELECT * FROM federation_data')
+      for (const r of fdRows as Array<{ peer_url: string; kind: string; payload: unknown }>) {
+        this.fedDataCache.set(`${r.peer_url}|${r.kind}`, Array.isArray(r.payload) ? (r.payload as unknown[]) : [])
+      }
+    } catch {
+      /* 表不存在(旧库未迁移)时忽略 */
+    }
 
     this.config = { ...structuredClone(DEFAULT_CONFIG), ...(await this.kvGet<ServerConfig>('config', this.config)) }
     this.updateState = { ...this.updateState, ...(await this.kvGet<Partial<UpdateState>>('update_state', this.updateState)) }
@@ -468,9 +480,44 @@ export class PgRepo extends MemoryRepo {
     return r
   }
 
-  override addFedMessage(input: { relation_id: string; body: string }): void {
+  override updateFedShare(id: string, patch: Record<string, string>): void {
+    super.updateFedShare(id, patch)
+    const r = this.fedRelations.find((x) => x.id === id)
+    if (r) this.fire('UPDATE federation_relations SET share = $1 WHERE id = $2', [JSON.stringify(r.share), id])
+  }
+
+  override getFedData(peerUrl: string, kind: string): unknown[] | null {
+    return this.fedDataCache.get(`${peerUrl}|${kind}`) ?? null
+  }
+
+  override setFedData(peerUrl: string, kind: string, payload: unknown[]): void {
+    super.setFedData(peerUrl, kind, payload)
+    this.fire('INSERT INTO federation_data (peer_url, kind, payload, updated_at) VALUES ($1,$2,$3,now()) ON CONFLICT (peer_url, kind) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()', [peerUrl, kind, JSON.stringify(payload)])
+  }
+
+  override mergeFedCombos(peerUrl: string, list: Combo[]): void {
+    super.mergeFedCombos(peerUrl, list)
+    // 组合写穿：镜像组合也落库(联邦组合与本地组合同表,id 天然带来源域名)
+    for (const c of list) {
+      this.fire('INSERT INTO combos (id, slug, name, description, author_id, author_name, likes, downloads_7d, status, origin_server, version, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, likes = EXCLUDED.likes, downloads_7d = EXCLUDED.downloads_7d, status = EXCLUDED.status, origin_server = EXCLUDED.origin_server, updated_at = EXCLUDED.updated_at', [c.id, c.slug, c.name, c.description, c.author_github, c.author, c.likes, c.downloads_7d, c.status, c.origin_server, c.version, c.updated_at])
+      for (const m of c.members) this.fire('INSERT INTO combo_members (combo_id, pkg, version, install_mode) VALUES ($1,$2,$3,$4) ON CONFLICT (combo_id, pkg) DO UPDATE SET version = EXCLUDED.version, install_mode = EXCLUDED.install_mode', [c.id, m.pkg, m.version, m.install_mode === 'manual' ? 'manual' : 'auto'])
+    }
+    this.kvSet('combos_revision', this.combosRevision)
+  }
+
+  override purgeExpiredCombos(graceHours: number): Array<{ id: string; name: string; author: string }> {
+    const expired = super.purgeExpiredCombos(graceHours)
+    for (const e of expired) {
+      this.fire('DELETE FROM combo_members WHERE combo_id = $1', [e.id])
+      this.fire('DELETE FROM combos WHERE id = $1', [e.id])
+    }
+    if (expired.length > 0) this.kvSet('combos_revision', this.combosRevision)
+    return expired
+  }
+
+  override addFedMessage(input: { relation_id: string; body: string; direction?: 'in' | 'out' }): void {
     super.addFedMessage(input)
-    this.fire('INSERT INTO federation_messages (relation_id, direction, body) VALUES ($1,$2,$3)', [input.relation_id, 'out', input.body])
+    this.fire("INSERT INTO federation_messages (relation_id, direction, body) VALUES ($1,$2,$3)", [input.relation_id, input.direction === 'in' ? 'in' : 'out', input.body])
   }
 
   override setUpdateState(state: UpdateState): void {

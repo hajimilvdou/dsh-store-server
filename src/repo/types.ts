@@ -18,6 +18,8 @@ export interface Repo {
   getReports(): StoredReport[]
   getLikes(): StoredLike[]
   installsOf(userId: string): CloudInstall[]
+  /** 全部用户的云端安装清单(联邦 users 导出用)。 */
+  installsOfAll(): CloudInstall[]
   getFedRelations(): FedRelation[]
   getFedMessages(): FedMessage[]
   getBlocklist(): string[]
@@ -79,7 +81,17 @@ export interface Repo {
   setPluginBlocked(pkg: string, blocked: boolean): void
   addFedRelation(input: { peer_url: string; mode: 'snapshot' | 'realtime' }): FedRelation
   setFedRelationStatus(id: string, status: FedRelation['status']): FedRelation | null
-  addFedMessage(input: { relation_id: string; body: string }): void
+  addFedMessage(input: { relation_id: string; body: string; direction?: 'in' | 'out' }): void
+  /** 更新联邦关系的同步元信息（share 内编码：kinds/last_sync_at/counts/error）。 */
+  updateFedShare(id: string, patch: Record<string, string>): void
+  /** 读取对端同步镜像（kind: plugins|agents|users；组合合并进 combos 主表不在此）。 */
+  getFedData(peerUrl: string, kind: string): unknown[] | null
+  /** 写入对端同步镜像快照（整包替换）。 */
+  setFedData(peerUrl: string, kind: string, payload: unknown[]): void
+  /** 合并对端组合快照：先移除该对端旧组合,再按 id upsert(组合 id 含来源域名,天然防冲突)。 */
+  mergeFedCombos(peerUrl: string, list: Combo[]): void
+  /** 清理超过宽限期仍未恢复的已删除组合(管理员 remove 后默认 3 天自动作废)。返回被清理项(用于通知作者)。 */
+  purgeExpiredCombos(graceHours: number): Array<{ id: string; name: string; author: string }>
   setUpdateState(state: UpdateState): void
   log(actor: string, action: string, detail: Record<string, unknown>): void
 

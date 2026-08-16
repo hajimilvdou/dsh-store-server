@@ -333,14 +333,25 @@ function startSyncNow() {
 const RENDER = {}
 
 RENDER.dash = async () => {
-  const [stats, sync, combos, reports, plugins] = await Promise.all([
-    api('/admin/stats'), api('/admin/sync'), api('/admin/combos'), api('/admin/reports'), api('/admin/plugins'),
+  const [stats, sync, combos, reports, plugins, fed, cfg] = await Promise.all([
+    api('/admin/stats'), api('/admin/sync'), api('/admin/combos'), api('/admin/reports'), api('/admin/plugins'), api('/admin/federation'), api('/admin/config'),
   ])
   const pendingCombos = combos.filter((c) => c.status === 'pending').length
   const pendingReports = reports.filter((r) => r.status === 'pending').length
   const needsReview = plugins.filter((p) => p.status === 'needs_review').length
   const agentCount = plugins.filter((p) => p.kind === 'preset').length
   const pluginCount = plugins.length - agentCount
+  // 联邦待办：待接受邀请 / 未读消息(含解除通知) / 同步失败
+  const fedPending = (fed.relations || []).filter((r) => r.status === 'pending').length
+  const fedMsgsIn = (fed.messages || []).filter((m) => m.direction === 'in').length
+  const fedErrors = (fed.relations || []).filter((r) => r.status === 'connected' && r.share && r.share.error).length
+  const reviewEnabled = !!(cfg.user && cfg.user.combo_review_enabled !== false)
+  const reviewTodo = reviewEnabled
+    ? `<tr><td>插件组审核（审核已开启）</td><td>${pendingCombos}</td><td><button class="abtn" onclick="page('combos')">去审核</button></td></tr>`
+    : `<tr><td>插件组审核</td><td colspan="2" style="color:var(--tx2)">已关闭：用户发布直接实时上线</td></tr>`
+  const fedTodo = (fedPending + fedMsgsIn + fedErrors) > 0
+    ? `<tr><td>联邦互联：${fedPending > 0 ? '待接受邀请 ' + fedPending + ' 个' : ''}${fedMsgsIn > 0 ? ' · 未读消息 ' + fedMsgsIn + ' 条' : ''}${fedErrors > 0 ? ' · 同步失败 ' + fedErrors + ' 个' : ''}</td><td>${fedPending + fedMsgsIn + fedErrors}</td><td><button class="abtn" onclick="page('fed')">去处理</button></td></tr>`
+    : ''
   return `<div class="a-title">📊 仪表盘</div>
   <div class="stat-row">
     <div class="stat"><div class="v">${pluginCount}</div><div class="k">收录插件</div><div class="s">↑ 今日收录同步中</div></div>
@@ -354,13 +365,15 @@ RENDER.dash = async () => {
     <tr><td>GitHub 增量同步（topic:dsh-plugin）</td><td>${sync.enabled ? '<span class="pill ok">已启用（token ×' + sync.tokens + '）</span>' : '<span class="pill wa">未配置 GITHUB_TOKENS</span>'}</td><td>${esc(sync.last_result || '—')}</td><td><button class="abtn pri" onclick="startSyncNow()">▶ 立即抓取</button></td></tr>
     <tr><td>Plugin / Agent 识别</td><td><span class="pill ok">同步管线自动识别</span></td><td>package.json(dsh) → Plugin · preset/agent.cordis.yml → Agent</td><td>—</td></tr>
     <tr><td>⭐ 星数快照 / 趋势榜重算</td><td><span class="pill ok">随同步任务</span></td><td>${esc(sync.last_run_at || '—')}</td><td>—</td></tr>
+    <tr><td>🌐 联邦数据同步（${esc(cfg.federation && cfg.federation.sync_interval_h || 24)} 小时一轮）</td><td>${fed.relations && fed.relations.filter((r) => r.status === 'connected').length ? '<span class="pill ok">已连接 ' + fed.relations.filter((r) => r.status === 'connected').length + ' 个对端</span>' : '<span class="pill wa">暂无已连接对端</span>'}</td><td>${fedErrors ? `<span style="color:var(--danger)">${fedErrors} 个关系同步失败</span>` : '—'}</td><td><button class="abtn pri" onclick="page('fed')">去管理</button></td></tr>
   </table>
   <div class="msgbox" id="syncMsg" style="display:none"></div></div>
   <div class="a-card"><h4>待办</h4><table>
     <tr><th>类型</th><th>数量</th><th>入口</th></tr>
     <tr><td>提取质量待人工完善（needs_review）</td><td>${needsReview}</td><td><button class="abtn" onclick="page('plugins')">去处理</button></td></tr>
-    <tr><td>组合待审核</td><td>${pendingCombos}</td><td><button class="abtn" onclick="page('combos')">去审核</button></td></tr>
+    ${reviewTodo}
     <tr><td>库外插件上报待处理</td><td>${pendingReports}</td><td><button class="abtn" onclick="page('reports')">去收录</button></td></tr>
+    ${fedTodo}
   </table></div>`
 }
 
@@ -423,23 +436,44 @@ RENDER.fed = async () => {
   const localState = local.enabled
     ? (local.secret_configured ? '<span class="pill ok">已开启 · 联邦密码已设置</span>' : '<span class="pill wa">已开启 · 联邦密码未设置</span>')
     : '<span class="pill wa">未开启</span>'
-  const rows = fed.relations.map((r) => `<tr>
+  const kindLabel = { plugins: '插件', agents: 'Agent', combos: '插件组', users: '用户及云端' }
+  const parseShare = (r) => {
+    const s = r.share || {}
+    const kinds = String(s.kinds || '').split(',').filter(Boolean)
+    const counts = (() => { try { return JSON.parse(s.counts || '{}') } catch { return {} } })()
+    const lastAt = String(s.last_sync_at || '').slice(0, 16).replace('T', ' ')
+    return { kinds, counts, lastAt, error: String(s.error || '') }
+  }
+  const rows = fed.relations.map((r) => {
+    const sh = parseShare(r)
+    const kindTxt = sh.kinds.length ? sh.kinds.map((k) => kindLabel[k] || k).join('、') : '全部'
+    const syncTxt = r.status === 'connected'
+      ? (sh.error ? `<span style="color:var(--danger);font-size:11px">⚠ ${esc(sh.error.slice(0, 60))}</span>`
+          : sh.lastAt ? `<span style="font-size:11px">上次同步 ${esc(sh.lastAt)}<br>${Object.entries(sh.counts).map(([k, v]) => `${kindLabel[k] || k} ${v}`).join(' · ')}</span>`
+          : '<span style="color:var(--tx2);font-size:11px">尚未同步（等待调度或手动同步）</span>')
+      : '<span style="color:var(--tx2);font-size:11px">—</span>'
+    return `<tr>
     <td><b>${esc(r.peer_url)}</b></td>
     <td>${r.status === 'connected' ? '<span class="pill ok">已连接</span>' : r.status === 'pending' ? '<span class="pill wa">待接受</span>' : r.status === 'rejected' ? '<span class="pill ba">已拒绝</span>' : '<span class="pill wa">已断联</span>'}</td>
-    <td style="font-size:11.5px">${esc(Object.entries(r.share).map(([k, v]) => k + ':' + v).join(' · ') || '—')}</td>
+    <td style="font-size:11.5px">${esc(kindTxt)}</td>
+    <td>${syncTxt}</td>
     <td>${r.mode === 'realtime' ? '<span class="pill ok">实时共享</span>' : '<span class="pill wa">快照</span>'}</td>
-    <td>${r.rtt_ms != null ? `<span style="color:var(--up)">${r.rtt_ms}ms</span>` : '—'}</td>
     <td>${r.status === 'pending' ? `<button class="abtn pri" onclick="fedAction('${r.id}','accept')">接受</button> <button class="abtn dan" onclick="fedAction('${r.id}','reject')">拒绝</button>` : `<button class="abtn" onclick="fedAction('${r.id}','disconnect')">断开</button>`}</td>
-  </tr>`).join('')
-  return `<div class="a-title">🌐 联邦互联 <small>（发起方主动邀请，接收方审核接受）</small></div>
-  <div class="a-card"><h4>＋ 发起联邦邀请</h4>
-    <div class="frow"><input id="fedUrl" placeholder="对方服务器地址，如 https://store-friend.com"><input id="fedSecret" placeholder="对方联邦密码" style="max-width:220px"><button class="abtn pri" style="flex:none" onclick="fedHandshake()">发送邀请</button></div>
+  </tr>`
+  }).join('')
+  const msgs = (fed.messages || []).slice(0, 20).map((m) => `<div style="padding:4px 0;border-bottom:1px dashed var(--line);font-size:11.5px">${m.direction === 'in' ? '📥' : '📤'} ${esc(String(m.created_at || '').slice(0, 16).replace('T', ' '))} · ${esc(m.body)}</div>`).join('') || '<div style="color:var(--tx2);font-size:11.5px">暂无消息</div>'
+  const kindsCb = Object.entries(kindLabel).map(([k, t]) => `<label class="ck" style="margin-right:10px"><input type="checkbox" id="fedKind-${k}" checked>${t}</label>`).join('')
+  return `<div class="a-title">🌐 联邦互联 <small>（发起方主动邀请，接收方审核接受 · 数据同步默认每 ${esc(local.sync_interval_h || 24)} 小时一轮，可手动触发）</small></div>
+  <div class="a-card"><h4>＋ 发起联邦邀请（选择同步类别）</h4>
+    <div class="frow" style="flex-wrap:wrap"><input id="fedUrl" placeholder="对方服务器地址，如 https://store-friend.com"><input id="fedSecret" placeholder="对方联邦密码" style="max-width:220px"><button class="abtn pri" style="flex:none" onclick="fedHandshake()">发送邀请</button></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--tx2)">同步类别：${kindsCb}<span style="font-size:11px">（对方接受后，本服按此类别周期性拉取对方数据：插件 / Agent 镜像入库，插件组合并进组合库，用户及云端仅镜像展示）</span></div>
     <div class="msg">本机状态：${localState} · 邀请由本服务器转发到对方 handshake 接口并携带「对方」联邦密码校验；本机联邦密码请在配置中心「🔗 服务器源与联邦」设置。</div>
     <div class="msgbox" id="fedMsg" style="display:none"></div></div>
-  <div class="a-card"><h4>联邦关系</h4><table>
-    <tr><th>对方服务器</th><th>状态</th><th>共享内容</th><th>模式</th><th>RTT</th><th>操作</th></tr>
+  <div class="a-card"><h4>联邦关系 <button class="abtn" style="float:right" onclick="fedSyncNow()">⟳ 立即同步</button></h4><table>
+    <tr><th>对方服务器</th><th>状态</th><th>同步类别</th><th>同步状态</th><th>模式</th><th>操作</th></tr>
     ${rows || '<tr><td colspan="6" style="color:var(--tx2)">暂无联邦关系</td></tr>'}
-  </table></div>`
+  </table></div>
+  <div class="a-card"><h4>联邦消息（含解除通知）</h4>${msgs}</div>`
 }
 
 RENDER.upd = async () => {
@@ -570,7 +604,8 @@ RENDER.agents = async () => {
 }
 
 RENDER.combos = async () => {
-  const combos = await api('/admin/combos')
+  const [combos, cfg] = await Promise.all([api('/admin/combos'), api('/admin/config')])
+  const reviewEnabled = !!(cfg.user && cfg.user.combo_review_enabled !== false)
   const pending = combos.filter((c) => c.status === 'pending')
   const rest = combos.filter((c) => c.status !== 'pending')
   const statusPill = (s) => s === 'published' ? '<span class="pill ok">已发布</span>' : s === 'unpublished' ? '<span class="pill ba">已下架</span>' : s === 'removed' ? '<span class="pill ba">已删除</span>' : '<span class="pill wa">待审核</span>'
@@ -604,6 +639,7 @@ RENDER.combos = async () => {
     </td></tr>`
   }
   return `<div class="a-title">🗂 组合管理 <small>发布 / 下架 / 删除均自动私信作者</small></div>
+  ${reviewEnabled ? '' : `<div class="msgbox" style="border-left-color:var(--gold);margin-bottom:12px">⚡ 插件组审核已关闭：用户发布直接实时上线,无需审核。如需开启请<a href="javascript:page('config')" style="color:var(--gold);text-decoration:underline">前往配置中心 → 插件组审核</a>。</div>`}
   <div class="a-card"><h4>待审核（${pending.length}）</h4><table>
     <tr><th>组合</th><th>作者</th><th>插件</th><th>点赞/下载</th><th>状态</th><th>版本/更新</th><th>操作</th></tr>
     ${pending.map(row).join('') || '<tr><td colspan="7" style="color:var(--tx2)">无待审核组合</td></tr>'}
@@ -685,6 +721,7 @@ RENDER.cfg = async () => {
     ${passOpt('源服务器连接密码', 'server.access_password', '留空 = 客户端连接本源无需密码（回落环境变量 ACCESS_PASSWORD）')}
     ${passOpt('联邦密码', 'federation.secret', '留空 = 未配置，服务器间联邦不可用（回落环境变量 FEDERATION_SECRET）')}
     ${bool('联邦（服务器间）', 'federation.enabled', cfg.federation.enabled)}
+    ${num('联邦数据同步间隔（小时）', 'federation.sync_interval_h', cfg.federation.sync_interval_h)}
     <div class="ci"><span class="lab">提示</span><span class="lab" style="text-align:right">源连接密码用于客户端加源；联邦密码用于服务器间握手，两者独立。清空输入并保存 = 关闭对应校验</span></div>
   </div></div>
 
@@ -769,14 +806,23 @@ async function act(fn, msgId, successText) {
   try { await fn(); flash(msgId, successText) } catch (e) { flash(msgId, e.message, false) }
 }
 const fedHandshake = () => act(async () => {
+  const kinds = ['plugins', 'agents', 'combos', 'users'].filter((k) => document.getElementById('fedKind-' + k) && document.getElementById('fedKind-' + k).checked)
   await post('/admin/federation/invite', {
     peer_url: document.getElementById('fedUrl').value.trim(),
     secret: document.getElementById('fedSecret').value.trim(),
     mode: 'snapshot',
+    kinds,
   })
   page('fed')
 }, 'fedMsg', '邀请已发送，等待对方管理员接受')
-const fedAction = (id, action) => act(async () => { await post('/admin/federation', { id, action }); page('fed') }, 'fedMsg', '操作成功')
+const fedAction = (id, action) => act(async () => {
+  await post('/admin/federation', { id, action })
+  page('fed')
+}, 'fedMsg', action === 'disconnect' ? '已断开（已通知对方服务器）' : '操作成功')
+const fedSyncNow = () => act(async () => {
+  await post('/admin/federation/sync', {})
+  page('fed')
+}, 'fedMsg', '同步完成，已刷新各关系同步状态')
 const saveRepoUrl = () => act(async () => { const cfg = await api('/admin/config'); cfg.update.repo_url = document.getElementById('repoUrl').value; await put('/admin/config', cfg); page('upd') }, 'updLog', '检测源已保存')
 const checkUpdateNow = async () => {
   try {
@@ -824,6 +870,8 @@ let scanTimer = null
 function renderScanBanner(st) {
   const el = document.getElementById('scanBanner')
   if (!el) return
+  // 从未扫描过(started_at 为空 / total=0)：不显示"已完成 0/N"横幅
+  if (!st || !st.started_at || !st.total) return
   const pct = st.total ? Math.round((st.done / st.total) * 100) : 0
   el.style.display = 'flex'
   el.innerHTML = `🛡 安全扫描 ${st.running ? '进行中' : '已完成'}：${st.done}/${st.total}（失败 ${st.failed} · 发现风险 ${st.risk}）${st.current ? ' · 正在扫描 ' + esc(st.current) : ''}` +

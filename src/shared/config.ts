@@ -133,6 +133,8 @@ export interface ServerConfig {
   federation: {
     enabled: boolean
     secret: string
+    /** 联邦数据同步间隔（小时，默认 24）：周期性拉取对端快照。 */
+    sync_interval_h: number
     share: {
       plugin_supplements: boolean
       combos: boolean
@@ -261,6 +263,7 @@ export const DEFAULT_CONFIG: ServerConfig = {
   federation: {
     enabled: true,
     secret: '',
+    sync_interval_h: 24,
     share: {
       plugin_supplements: true,
       combos: true,

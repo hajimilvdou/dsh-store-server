@@ -18,6 +18,7 @@ import type { Repo } from './repo/types.js'
 import { pingDb } from './db/pool.js'
 import type { AuthService } from './auth.js'
 import type { GithubSync } from './sync/github.js'
+import { FedSync, FED_KINDS, type FedSyncKind } from './sync/federation.js'
 import { scanPlugin } from './security/scan.js'
 import type { AlertService, RuntimeState } from './security/guard.js'
 import type { UpdateService } from './update.js'
@@ -40,6 +41,7 @@ export async function registerRoutes(
   cfg: ServerConfig,
   auth: AuthService,
   sync: GithubSync,
+  fedSync: FedSync,
   alerts: AlertService,
   runtime: RuntimeState,
   updater: UpdateService,
@@ -161,6 +163,7 @@ export async function registerRoutes(
     }
     const next: ServerConfig = { ...repo.getConfig(), admin: { ...repo.getConfig().admin, password } }
     repo.setConfig(next)
+    Object.assign(cfg, next)
     repo.log('admin', 'setup.password', {})
     return { ok: true }
   })
@@ -487,15 +490,40 @@ export async function registerRoutes(
   })
 
   /* ================= 联邦（服务器间） ================= */
-  app.post<{ Body: { from_url: string; share?: Record<string, unknown>; mode?: 'snapshot' | 'realtime' } }>(API.federationHandshake, async (req, reply) => {
+  app.post<{ Body: { from_url: string; share?: Record<string, unknown>; mode?: 'snapshot' | 'realtime'; kinds?: string[] } }>(API.federationHandshake, async (req, reply) => {
     if (!requireFederation(req, reply)) return
     const fromUrl = req.body?.from_url
     if (typeof fromUrl !== 'string' || !fromUrl.trim()) {
       return reply.code(400).send({ error: 'bad_request', message: '对方地址必填' })
     }
     const r = repo.addFedRelation({ peer_url: fromUrl.trim(), mode: req.body?.mode ?? 'snapshot' })
-    repo.log('admin', 'federation.handshake', { peer: fromUrl })
+    // 对方选择的同步类别(缺省全部)存进关系 share,接受后按此同步
+    const kinds = Array.isArray(req.body?.kinds) ? (req.body.kinds as string[]).filter((k) => FED_KINDS.includes(k as FedSyncKind)) : []
+    if (kinds.length) repo.updateFedShare(r.id, { kinds: kinds.join(',') })
+    repo.log('admin', 'federation.handshake', { peer: fromUrl, kinds })
     return { ok: true, message: '邀请已发送，等待对方接受', id: r.id }
+  })
+  /** 联邦数据同步导出：对端按类别拉取本服快照(需联邦密码)。 */
+  app.get<{ Querystring: { kind?: string } }>('/api/v1/federation/sync', async (req, reply) => {
+    if (!requireFederation(req, reply)) return
+    const kind = req.query.kind
+    if (!kind || !FED_KINDS.includes(kind as FedSyncKind)) {
+      return reply.code(400).send({ error: 'bad_request', message: `kind 必填且 ∈ ${FED_KINDS.join('|')}` })
+    }
+    const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+    if (kind === 'plugins') {
+      return { kind, server: self, items: repo.getPlugins() }
+    }
+    if (kind === 'agents') {
+      return { kind, server: self, items: repo.getPlugins().filter((p) => p.kind === 'preset') }
+    }
+    if (kind === 'combos') {
+      return { kind, server: self, items: repo.getCombos().filter((c) => c.status !== 'removed') }
+    }
+    // users：非敏感字段镜像 + 云端清单(只读,对端用于作者资料展示/统计)
+    const users = repo.getUsers().map((u) => ({ id: u.id, github_id: u.github_id, login: u.login, name: u.name, home_server: u.home_server, status: u.status, registered_at: u.registered_at }))
+    const installs = repo.installsOfAll()
+    return { kind, server: self, items: { users, installs } }
   })
   app.get(API.federationChanges, async (req, reply) => {
     if (!requireFederation(req, reply)) return
@@ -511,7 +539,8 @@ export async function registerRoutes(
     if (text.length > cfg.message.max_length) {
       return reply.code(400).send({ error: 'bad_request', message: `消息限长 ${cfg.message.max_length} 字` })
     }
-    repo.addFedMessage({ relation_id: relationId, body: text })
+    // 对端发来的站内信(含解除连接通知):direction=in,管理端消息区/仪表盘待办可见
+    repo.addFedMessage({ relation_id: relationId, body: text, direction: 'in' })
     return { ok: true }
   })
 
@@ -576,7 +605,8 @@ export async function registerRoutes(
   /* ---- 插件库一键安全扫描（后台任务 + 进度轮询） ---- */
   app.get('/admin/scan/status', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return runtime.scanProgress ?? { running: false, total: repo.getPlugins().length, done: 0, current: null, failed: 0, risk: 0, started_at: null, finished_at: null }
+    // 从未扫描过时 total=0（而非插件总数 4506）：前端据此不显示"已完成 0/N"误导横幅。
+    return runtime.scanProgress ?? { running: false, total: 0, done: 0, current: null, failed: 0, risk: 0, started_at: null, finished_at: null }
   })
   app.post('/admin/scan', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
@@ -747,6 +777,9 @@ export async function registerRoutes(
     next.federation.secret = typeof next.federation.secret === 'string' ? next.federation.secret : ''
     next.federation.enabled = next.federation.enabled !== false
     repo.setConfig(next)
+    // ⚠ 关键：同步闭包快照 cfg —— 接口层(manifest/createCombo 等)读取的是 cfg 引用,
+    // 不同步会导致"管理端改了配置、用户端/接口不生效"(如插件组审核开关)。
+    Object.assign(cfg, next)
     // 密钥即时热更新：同步 token 池、OAuth/JWT、管理端口令全部生效
     sync.setTokens(next.sync.github_tokens)
     sync.setMaxRepos(next.sync.max_repos)
@@ -788,14 +821,15 @@ export async function registerRoutes(
       config: { enabled: fed.enabled, secret_configured: !!fed.secret },
     }
   })
-  // 管理端「发送邀请」：本服务器代表管理员向对方服务器发起握手（携带对方联邦密码），
+  // 管理端「发送邀请」：本服务器代表管理员向对方服务器发起握手（携带对方联邦密码 + 选择同步类别），
   // 由对方 handshake 接口校验；浏览器不跨域直接调对方，避免 CORS 与密钥暴露面。
-  app.post<{ Body: { peer_url: string; secret: string; mode?: 'snapshot' | 'realtime' } }>('/admin/federation/invite', async (req, reply) => {
+  app.post<{ Body: { peer_url: string; secret: string; mode?: 'snapshot' | 'realtime'; kinds?: string[] } }>('/admin/federation/invite', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const peerUrl = req.body?.peer_url?.trim()
     const secret = req.body?.secret
     if (!peerUrl) return reply.code(400).send({ error: 'bad_request', message: '对方服务器地址必填' })
     if (typeof secret !== 'string' || !secret) return reply.code(400).send({ error: 'bad_request', message: '对方联邦密码必填' })
+    const kinds = Array.isArray(req.body?.kinds) ? (req.body.kinds as string[]).filter((k) => FED_KINDS.includes(k as FedSyncKind)) : [...FED_KINDS]
     // 本机对外地址：OAuth 场景同样依赖反代/域名的显式配置，优先 OAUTH_CALLBACK_URL。
     const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
     const peer = peerUrl.replace(/\/+$/, '')
@@ -803,7 +837,7 @@ export async function registerRoutes(
       const res = await fetch(`${peer}/api/v1/federation/handshake`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Federation-Secret': secret, 'User-Agent': 'dsh-store-server' },
-        body: JSON.stringify({ from_url: self, mode: req.body?.mode ?? 'snapshot' }),
+        body: JSON.stringify({ from_url: self, mode: req.body?.mode ?? 'snapshot', kinds }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { message?: string } | null
@@ -813,7 +847,8 @@ export async function registerRoutes(
       return reply.code(502).send({ error: 'peer_unreachable', message: '无法访问对方服务器：请确认地址可公网访问、且对方已开启联邦并配置联邦密码' })
     }
     const r = repo.addFedRelation({ peer_url: peer, mode: req.body?.mode ?? 'snapshot' })
-    repo.log('admin', 'federation.invite', { peer })
+    repo.updateFedShare(r.id, { kinds: kinds.join(',') })
+    repo.log('admin', 'federation.invite', { peer, kinds })
     return { ok: true, message: '邀请已发送，等待对方管理员接受', id: r.id }
   })
   app.post<{ Body: { id: string; action: 'accept' | 'reject' | 'disconnect' } }>(API.adminFederation, async (req, reply) => {
@@ -822,7 +857,20 @@ export async function registerRoutes(
     const r = repo.setFedRelationStatus(id, action === 'accept' ? 'connected' : action === 'reject' ? 'rejected' : 'disconnected')
     if (!r) return reply.code(404).send({ error: 'not_found' })
     repo.log('admin', `federation.${action}`, { id })
+    // 单方面解除：通知对方服务器(对方仪表盘待办/消息区可见)。
+    if (action === 'disconnect' || action === 'reject') {
+      const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+      repo.addFedMessage({ relation_id: r.id, body: `已向 ${self} 发送解除通知`, direction: 'out' })
+      void fedSync.notifyPeer(r, `对方服务器 ${self} 已单方面解除联邦连接${action === 'reject' ? '（拒绝邀请）' : ''}`)
+    }
     return r
+  })
+  /** 手动触发联邦同步（立即拉取全部已连接关系的已选类别；测试/即时同步用）。 */
+  app.post('/admin/federation/sync', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const results = await fedSync.runOnce()
+    repo.log('admin', 'federation.sync.manual', { relations: results.length })
+    return { ok: true, results }
   })
 
   app.get(API.adminUpdateStatus, async (req, reply) => {
