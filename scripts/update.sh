@@ -65,7 +65,7 @@ RUNEOF
   step "① 容器模式：拉取新镜像 ${NEW_IMAGE}"
   docker pull "${NEW_IMAGE}"
 
-  step "② 由一次性编排容器重建 dshstore-api（迁移由新容器启动时自动执行）"
+  step "② 由一次性编排容器重建 dshstore-api（先执行数据库迁移，再重建 api）"
   # 编排容器跑在宿主 socket 上；api 容器被 rm 后本脚本随之终止，后续自检/回滚都在编排容器内完成
   docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
@@ -73,8 +73,14 @@ RUNEOF
     --network "${NET}" \
     --entrypoint sh docker:cli -c '
       set -e
-      IMAGE="$1"; OLD="$2"; NET="$3"
+      IMAGE="$1"; OLD="$2"; NET="$3"; DBURL="$4"
       rm -f /opt/dsh-store/api.update-result
+      echo "==> 执行数据库迁移（热更新自动带迁移）"
+      if [ -n "$DBURL" ]; then
+        docker run --rm --network "$NET" -e DATABASE_URL="$DBURL" "$IMAGE" node dist/db/migrate.js
+      else
+        echo "==> DATABASE_URL 为空，跳过迁移"
+      fi
       echo "==> 拉取并重建 dshstore-api → $IMAGE"
       docker pull "$IMAGE" >/dev/null
       docker rm -f dshstore-api
@@ -93,7 +99,7 @@ RUNEOF
         echo "已回滚到 $OLD" >&2
         exit 1
       fi
-    ' sh "${NEW_IMAGE}" "${OLD_IMAGE}" "${NET}"
+    ' sh "${NEW_IMAGE}" "${OLD_IMAGE}" "${NET}" "${DATABASE_URL:-}"
 
   echo "面板热更新流水线已执行完毕（结果见上方输出）"
   exit 0
