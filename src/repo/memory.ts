@@ -624,7 +624,14 @@ export class MemoryRepo implements Repo {
     return this.nodes
   }
   getUsers(): User[] {
-    return this.users
+    // combo_count 实时重算：组合创建/用户删除(硬删)/管理员软删后即时反映，不依赖启动快照。
+    // 口径与启动加载一致 = 该作者当前存在的组合数（不含管理员软删 removed 的组）。
+    // ⚠️ 与配额口径不同：countUserCombos 仍包含 removed（软删 3 天宽限期内占配额防绕过），
+    //    因此可能出现"用户管理显示 0 个组但暂时不能新建"——属设计（宽限期后自动释放）。
+    return this.users.map((u) => ({
+      ...u,
+      combo_count: this.combos.filter((c) => c.author === u.login && c.status !== 'removed').length,
+    }))
   }
   getReports(): StoredReport[] {
     return this.reports
