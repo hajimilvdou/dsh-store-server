@@ -484,6 +484,29 @@ export class MemoryRepo implements Repo {
     return this.users.find((u) => u.login === login)?.registered_at ?? null
   }
 
+  registerUser(input: { login: string; name: string | null; githubId: number; homeServer: string }): User {
+    const existing = this.users.find((u) => u.github_id === input.githubId)
+    if (existing) {
+      // GitHub 用户可能改名/改昵称：以 github_id 为准保持同一账号，刷新资料
+      existing.login = input.login
+      existing.name = input.name
+      existing.home_server = input.homeServer
+      return existing
+    }
+    const u: User = {
+      id: `u_${input.login}`,
+      github_id: input.githubId,
+      login: input.login,
+      name: input.name,
+      home_server: input.homeServer,
+      registered_at: new Date().toISOString().slice(0, 10),
+      combo_count: 0,
+      status: 'active',
+    }
+    this.users.push(u)
+    return u
+  }
+
   checkLikeRisk(userId: string, login: string, target: string, ip: string): string | null {
     const now = Date.now()
     const risk = this.config.risk

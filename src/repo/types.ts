@@ -49,6 +49,9 @@ export interface Repo {
   resolveRiskLike(id: number, action: 'include' | 'reject'): StoredRiskLike | null
   ensureLike(userId: string, target: string): void
   userRegisteredAt(login: string): string | null
+  /** GitHub OAuth 登录时幂等注册/更新用户：不存在则创建（保留首次注册时间），
+   *  已存在则刷新 login/name/home_server（GitHub 改名后保持同一账号）。返回当前用户。 */
+  registerUser(input: { login: string; name: string | null; githubId: number; homeServer: string }): User
   /** 匿名会话凭证：签发 / 校验（过期即失效）。 */
   mintAnonToken(instanceId: string): string
   verifyAnonToken(token: string): boolean

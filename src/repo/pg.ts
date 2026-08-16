@@ -390,6 +390,20 @@ export class PgRepo extends MemoryRepo {
     return u
   }
 
+  override registerUser(input: { login: string; name: string | null; githubId: number; homeServer: string }): User {
+    const before = this.users.find((u) => u.github_id === input.githubId)
+    const u = super.registerUser(input)
+    if (before) {
+      // 已存在：仅当资料变化才写穿，避免高频请求（currentUser 懒注册兜底）产生无谓写
+      if (before.login !== input.login || before.name !== input.name || before.home_server !== input.homeServer) {
+        this.fire('UPDATE users SET login = $1, name = $2, home_server = $3 WHERE github_id = $4', [input.login, input.name, input.homeServer, input.githubId])
+      }
+    } else {
+      this.fire('INSERT INTO users (id, github_id, login, name, home_server, status, registered_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (github_id) DO NOTHING', [u.id, u.github_id, u.login, u.name, u.home_server, u.status, u.registered_at])
+    }
+    return u
+  }
+
   override setConfig(cfg: ServerConfig): void {
     super.setConfig(cfg)
     this.kvSet('config', cfg)
