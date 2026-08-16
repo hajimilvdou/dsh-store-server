@@ -251,14 +251,35 @@ export class PgRepo extends MemoryRepo {
     this.kvSet('combos_revision', this.combosRevision)
   }
 
-  /** 同步管线落库（插件 + 星数快照）。 */
+  /** 同步管线落库（插件 + 星数快照）。await 全部写穿,失败显式记录,落库后校验行数。 */
   async persistSync(): Promise<void> {
+    const jobs: Array<Promise<void>> = []
     for (const p of this.plugins) {
-      this.fire(
-        `INSERT INTO plugins (${PLUGIN_COLS}) VALUES (${PLUGIN_PLACEHOLDERS})
-         ON CONFLICT (id) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, stars_delta_7d = EXCLUDED.stars_delta_7d, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
-        pluginToRow(p),
+      jobs.push(
+        this.pool
+          .query(
+            `INSERT INTO plugins (${PLUGIN_COLS}) VALUES (${PLUGIN_PLACEHOLDERS})
+             ON CONFLICT (id) DO UPDATE SET stars = EXCLUDED.stars, stars_delta_day = EXCLUDED.stars_delta_day, stars_delta_7d = EXCLUDED.stars_delta_7d, trending_rank = EXCLUDED.trending_rank, is_new = EXCLUDED.is_new, author = EXCLUDED.author, install = EXCLUDED.install, updated_at = EXCLUDED.updated_at`,
+            pluginToRow(p),
+          )
+          .then(() => undefined)
+          .catch((e: unknown) => {
+            console.error('[pg] persistSync 写穿失败:', p?.id, e instanceof Error ? e.message : e)
+          }),
       )
+    }
+    await Promise.all(jobs)
+    // 落库校验：DB 行数 vs 内存行数,不一致显式告警（此前 fire-and-forget 静默少写无法察觉）。
+    try {
+      const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM plugins')
+      const dbCount = rows[0]?.n ?? 0
+      if (dbCount !== this.plugins.length) {
+        console.error(`[pg] persistSync 校验不一致: DB=${dbCount} 内存=${this.plugins.length}（差异 ${Math.abs(dbCount - this.plugins.length)} 条）`)
+      } else {
+        console.log(`[pg] persistSync 完成: ${dbCount} 条与内存一致`)
+      }
+    } catch (e) {
+      console.error('[pg] persistSync 校验查询失败:', e instanceof Error ? e.message : e)
     }
     this.kvSet('plugins_revision', this.pluginsRevision)
   }
