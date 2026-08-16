@@ -187,7 +187,30 @@ export async function registerRoutes(
     const user = await auth.exchange(code)
     if (!user) return reply.code(401).send({ error: 'unauthorized', message: 'GitHub 授权失败' })
     const token = auth.issueToken(user)
-    return { token, login: user.login, name: user.name }
+    // 授权完成页：自动把 token postMessage 回传给 opener(客户端商城窗口)，无需手动复制粘贴。
+    // 兜底：opener 不可用(用户直接访问本页)时页面展示 token 文本供手动复制。
+    const esc = (s: unknown): string => JSON.stringify(String(s ?? ''))
+    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>GitHub 授权完成</title></head>
+<body style="margin:0;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:#0d1117;color:#e6edf3;display:flex;align-items:center;justify-content:center;min-height:100vh">
+<div style="text-align:center;padding:24px">
+<div style="font-size:44px">✅</div>
+<h2 style="margin:10px 0 6px">GitHub 授权成功</h2>
+<p style="color:#8b98a5;margin:0 0 14px">正在自动传回 DSH 商城…请返回商城面板</p>
+<details style="font-size:12px;color:#5b6675;text-align:left;margin:0 auto;max-width:520px">
+<summary>手动复制 token(自动回传失败时)</summary>
+<pre style="white-space:pre-wrap;word-break:break-all;background:#161b22;border:1px solid #2b3340;border-radius:8px;padding:10px">${esc(token)}</pre>
+</details>
+</div>
+<script>
+(function () {
+  var payload = { type: 'dsh-store-auth', token: ${esc(token)}, login: ${esc(user.login)}, name: ${esc(user.name ?? null)} }
+  try { if (window.opener) { window.opener.postMessage(payload, '*') } } catch (e) {}
+  setTimeout(function () { try { window.close() } catch (e) {} }, 600)
+})();
+</script>
+</body></html>`
+    reply.type('text/html; charset=utf-8')
+    return reply.send(html)
   })
 
   /* ================= 健康 ================= */
