@@ -78,6 +78,20 @@ export async function registerRoutes(
 ): Promise<void> {
   // 纯离线演示模式：未配置 OAuth 且未配置 GitHub token 时才接受演示账号（生产不残留后门）
 
+  /** 读取仓库根 package.json（自动检测版本用）：先 main 后 master 分支回退，
+   *  规避仓库默认分支名差异；404 才回退，其他错误（限流/网络）直接失败。 */
+  const readRepoPkg = async (repoPath: string, signal: AbortSignal): Promise<{ name?: string; version?: string } | null> => {
+    for (const branch of ['main', 'master']) {
+      const res = await fetch(`https://raw.githubusercontent.com/${repoPath}/${branch}/package.json`, {
+        headers: { 'User-Agent': 'dsh-store-server', Accept: 'application/vnd.github.raw+json' },
+        signal,
+      })
+      if (res.ok) return (await res.json()) as { name?: string; version?: string }
+      if (res.status !== 404) return null
+    }
+    return null
+  }
+
   /** 客户端插件版本自动检测（惰性 + 30 分钟 TTL；force=true 强制刷新）。 */
   const detectClientVersion = async (force = false): Promise<ClientPushDetect> => {
     if (clientPushDetecting) return clientPushDetecting
@@ -95,15 +109,11 @@ export async function registerRoutes(
       const ctrl = new AbortController()
       const timer = setTimeout(() => ctrl.abort(), 10000)
       try {
-        const res = await fetch(`https://raw.githubusercontent.com/${m[1]}/main/package.json`, {
-          headers: { 'User-Agent': 'dsh-store-server', Accept: 'application/vnd.github.raw+json' },
-          signal: ctrl.signal,
-        })
-        if (!res.ok) {
-          clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: `无法读取仓库 package.json（HTTP ${res.status}）` }
+        const pkg = await readRepoPkg(m[1], ctrl.signal)
+        if (!pkg) {
+          clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: '无法读取仓库 package.json（仓库需公开且存在 main/master 分支）' }
           return clientPushCache
         }
-        const pkg = (await res.json()) as { version?: string }
         clientPushCache = { version: String(pkg.version ?? ''), at: now, error: null }
         return clientPushCache
       } catch (e) {
@@ -1073,15 +1083,11 @@ export async function registerRoutes(
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 10000)
     try {
-      // 公开仓库直接读 main 分支 package.json（无需 token）——版本号单一事实来源
-      const res = await fetch(`https://raw.githubusercontent.com/${m[1]}/main/package.json`, {
-        headers: { 'User-Agent': 'dsh-store-server', Accept: 'application/vnd.github.raw+json' },
-        signal: ctrl.signal,
-      })
-      if (!res.ok) {
-        return reply.code(502).send({ error: 'fetch_failed', message: `无法读取仓库 package.json（HTTP ${res.status}，请确认仓库公开且存在 main 分支）` })
+      // 公开仓库直接读 main/master 分支 package.json（无需 token）——版本号单一事实来源
+      const pkg = await readRepoPkg(m[1], ctrl.signal)
+      if (!pkg) {
+        return reply.code(502).send({ error: 'fetch_failed', message: '无法读取仓库 package.json（请确认仓库公开且存在 main 或 master 分支）' })
       }
-      const pkg = (await res.json()) as { name?: string; version?: string }
       return { ok: true, name: pkg.name ?? '', version: pkg.version ?? '' }
     } catch (e) {
       return reply.code(502).send({ error: 'fetch_failed', message: `检测失败：${String((e as Error)?.message ?? e)}` })
