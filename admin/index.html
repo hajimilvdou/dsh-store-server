@@ -850,6 +850,11 @@ const loadClientPushStatus = async () => {
   if (!box) return
   try {
     const st = await api('/admin/client-push')
+    // 回填表单（HTML 写死的默认值不代表实际配置）
+    const specEl = document.getElementById('cpSpec')
+    const enEl = document.getElementById('cpEnabled')
+    if (specEl) specEl.value = st.install_spec || 'github:hajimilvdou/dsh-storecloud'
+    if (enEl) enEl.checked = st.enabled !== false
     const d = st.detected
     box.innerHTML = d
       ? `当前：<b>v${esc(d.version || '—')}</b>（自动检测于 ${esc(String(d.at_iso || '').slice(0, 16).replace('T', ' '))}，缓存 30 分钟）${d.error ? `<span style="color:var(--danger)"> · ${esc(d.error)}</span>` : ''} · <a href="javascript:void(0)" onclick="checkClientVersion()">🔄 立即检测</a>`

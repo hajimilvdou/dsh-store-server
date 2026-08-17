@@ -326,14 +326,19 @@ export async function registerRoutes(
 
   /* ================= manifest ================= */
   app.get(API.manifest, async (): Promise<Manifest> => {
-    // 客户端插件版本推送（自动）：启用开关 + 自动检测仓库最新版本（30 分钟 TTL 缓存，惰性刷新）。
-    // 检测失败/未检测到时用配置兼容字段 plugin_version（旧版手动值）；两者皆空则不推送。
+    // 客户端插件版本推送（自动）：启用开关 + 自动检测仓库最新版本（30 分钟 TTL 缓存）。
+    // ⚠️ 检测不得阻塞 manifest 响应：缓存新鲜直接用缓存；过期/未检测时后台异步刷新（void），
+    // 客户端请求永远秒回，检测结果下次 manifest 生效。检测失败回落配置兼容字段 plugin_version。
     let clientPlugin: Manifest['client_plugin'] = null
     const c = repo.getConfig().client
-    if (c.push_enabled) {
-      const detected = await detectClientVersion()
-      const version = detected.version || c.plugin_version || ''
+    // push_enabled 缺省视为启用（旧持久化配置无该键时为 undefined，不应静默关闭推送）
+    if (c.push_enabled !== false) {
+      const cached = clientPushCache
+      const version = (cached?.version || c.plugin_version || '').trim()
       if (version) clientPlugin = { version, install: c.install_spec || 'github:hajimilvdou/dsh-storecloud' }
+      if (!cached || Date.now() - cached.at >= CLIENT_PUSH_TTL_MS) {
+        void detectClientVersion()
+      }
     }
     return {
       protocol_version: PROTOCOL_VERSION,
