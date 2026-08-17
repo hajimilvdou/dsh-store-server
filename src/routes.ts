@@ -93,6 +93,13 @@ export async function registerRoutes(
   }
 
   /** 客户端插件版本自动检测（惰性 + 30 分钟 TTL；force=true 强制刷新）。 */
+  // 检测失败保留上次成功版本用于展示，但不刷新满量 TTL：仅给 5 分钟窗口，5 分钟后下一次
+  // manifest 请求自动重试——避免"一次抖动失败就让推送停用 30 分钟"（表现为自动失败、手动成功）。
+  const failCache = (err: string, prevVersion: string): ClientPushDetect => {
+    clientPushCache = { version: prevVersion, at: Date.now() - CLIENT_PUSH_TTL_MS + 5 * 60 * 1000, error: err }
+    return clientPushCache
+  }
+
   const detectClientVersion = async (force = false): Promise<ClientPushDetect> => {
     if (clientPushDetecting) return clientPushDetecting
     if (!force && clientPushCache && Date.now() - clientPushCache.at < CLIENT_PUSH_TTL_MS) {
@@ -102,23 +109,21 @@ export async function registerRoutes(
       const spec = String(repo.getConfig().client.install_spec || 'github:hajimilvdou/dsh-storecloud').trim()
       const m = spec.match(/^github:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/)
       const now = Date.now()
+      const prevVersion = clientPushCache?.version ?? ''
       if (!m) {
-        clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: '安装地址非 github:owner/repo，无法自动检测版本' }
-        return clientPushCache
+        return failCache('安装地址非 github:owner/repo，无法自动检测版本', prevVersion)
       }
       const ctrl = new AbortController()
       const timer = setTimeout(() => ctrl.abort(), 10000)
       try {
         const pkg = await readRepoPkg(m[1], ctrl.signal)
         if (!pkg) {
-          clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: '无法读取仓库 package.json（仓库需公开且存在 main/master 分支）' }
-          return clientPushCache
+          return failCache('无法读取仓库 package.json（仓库需公开且存在 main/master 分支）', prevVersion)
         }
         clientPushCache = { version: String(pkg.version ?? ''), at: now, error: null }
         return clientPushCache
       } catch (e) {
-        clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: `检测失败：${String((e as Error)?.message ?? e)}` }
-        return clientPushCache
+        return failCache(`检测失败：${String((e as Error)?.message ?? e)}`, prevVersion)
       } finally {
         clearTimeout(timer)
       }
