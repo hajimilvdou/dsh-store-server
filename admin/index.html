@@ -209,6 +209,8 @@ function page(p) {
     main.innerHTML = html
     // 系统更新页：加载客户端版本推送的自动检测状态
     if (p === 'upd') loadClientPushStatus()
+    // 用户管理页：渲染用户表格（支持姓名搜索）
+    if (p === 'users') renderUsers()
   }).catch((e) => {
     main.innerHTML = `<div class="a-card"><h4>加载失败</h4><div class="msg" style="color:var(--danger)">${esc(e.message)}</div></div>`
   })
@@ -659,10 +661,24 @@ RENDER.combos = async () => {
 RENDER.users = async () => {
   const users = await api('/admin/users')
   return `<div class="a-title">👥 用户管理 <small>（仅 GitHub 登录 · 不采集头像）</small></div>
-  <div class="a-card"><table>
-    <tr><th>用户名</th><th>姓名</th><th>注册时间</th><th>组合数</th><th>状态</th><th>操作</th></tr>
-    ${users.map((u) => `<tr><td>${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td>${esc(String(u.registered_at || '').slice(0, 10))}</td><td>${u.combo_count}/3</td><td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill ba">已禁用</span>'}</td><td>${u.status === 'active' ? `<button class="abtn dan" onclick="userAction('${u.id}',true)">禁用</button>` : `<button class="abtn pri" onclick="userAction('${u.id}',false)">恢复</button>`}</td></tr>`).join('')}
-  </table></div>`
+  <div class="a-card">
+    <div class="frow"><input id="userSearch" placeholder="🔍 按用户名 / 姓名搜索…" oninput="renderUsers()" style="max-width:320px"></div>
+    <div id="userTable"></div>
+  </div>`
+}
+
+function renderUsers() {
+  const kw = (document.getElementById('userSearch').value || '').trim().toLowerCase()
+  api('/admin/users').then((users) => {
+    const list = kw
+      ? users.filter((u) => String(u.login || '').toLowerCase().includes(kw) || String(u.name || '').toLowerCase().includes(kw))
+      : users
+    const c = (u) => (u.cloud || { plugin: 0, combo: 0, agent: 0 })
+    document.getElementById('userTable').innerHTML = `<table>
+      <tr><th>用户</th><th>注册时间</th><th>组合数</th><th>云端插件</th><th>云端组合</th><th>云端Agent</th><th>状态</th><th>操作</th></tr>
+      ${list.map((u) => `<tr><td><b>${esc(u.login)}</b>${u.name ? `<span style="color:var(--tx2);margin-left:6px">(${esc(u.name)})</span>` : ''}</td><td>${esc(String(u.registered_at || '').slice(0, 10))}</td><td>${u.combo_count}</td><td>${c(u).plugin}</td><td>${c(u).combo}</td><td>${c(u).agent}</td><td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill ba">已禁用</span>'}</td><td>${u.status === 'active' ? `<button class="abtn dan" onclick="userAction('${u.id}',true)">禁用</button>` : `<button class="abtn pri" onclick="userAction('${u.id}',false)">恢复</button>`}</td></tr>`).join('') || '<tr><td colspan="8" style="color:var(--tx2)">无匹配用户</td></tr>'}
+    </table>`
+  }).catch(() => {})
 }
 
 RENDER.reports = async () => {

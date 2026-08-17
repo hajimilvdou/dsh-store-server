@@ -795,7 +795,24 @@ export async function registerRoutes(
 
   app.get(API.adminUsers, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return repo.getUsers()
+    // 云端统计：installs 按用户聚合（同类型同目标去重计数），user_id 形如 u_<login>
+    const cloudCount: Record<string, { plugin: number; combo: number; agent: number }> = {}
+    const seenPer: Record<string, Set<string>> = {}
+    for (const i of repo.installsOfAll()) {
+      const login = String(i.user_id).replace(/^u_/, '')
+      const seen = (seenPer[login] ??= new Set())
+      const key = i.type + ':' + i.target
+      if (seen.has(key)) continue
+      seen.add(key)
+      const b = (cloudCount[login] ??= { plugin: 0, combo: 0, agent: 0 })
+      if (i.type === 'plugin') b.plugin++
+      else if (i.type === 'combo') b.combo++
+      else if (i.type === 'agent') b.agent++
+    }
+    return repo.getUsers().map((u) => ({
+      ...u,
+      cloud: cloudCount[u.login] ?? { plugin: 0, combo: 0, agent: 0 },
+    }))
   })
   app.post<{ Body: { id: string; banned: boolean } }>(API.adminUsers, async (req, reply) => {
     if (!requireAdmin(req, reply)) return
