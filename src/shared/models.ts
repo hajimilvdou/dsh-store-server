@@ -136,8 +136,8 @@ export interface ServerSource {
   last_seen_at: string | null
   /** 客户端视角角色：主源 / 备用（主源制，同一时刻仅一个主源）。 */
   role?: 'primary' | 'backup'
-  /** 连接状态：已连接 / 未连接 / 已断联。 */
-  status?: 'connected' | 'disconnected' | 'unreachable'
+  /** 连接状态：已连接 / 连接中 / 未连接 / 已断联。 */
+  status?: 'connected' | 'connecting' | 'disconnected' | 'unreachable'
 }
 
 /* ---------------- 公告 ---------------- */
