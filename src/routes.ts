@@ -47,6 +47,18 @@ function deepMerge<T>(base: T, patch: unknown): T {
   return out as T
 }
 
+/* ================= 客户端插件版本自动检测（版本号单一事实来源 = 仓库 package.json） =================
+ * 内置默认安装地址（用户端仓库），管理员无需填写；版本号由服务端定时/惰性检测并缓存（30 分钟 TTL），
+ * manifest 下发自动携带检测到的最新版本。检测失败时保留上次缓存值，无缓存则不推送。 */
+const CLIENT_PUSH_TTL_MS = 30 * 60 * 1000
+interface ClientPushDetect {
+  version: string
+  at: number
+  error: string | null
+}
+let clientPushCache: ClientPushDetect | null = null
+let clientPushDetecting: Promise<ClientPushDetect> | null = null
+
 /**
  * 路由注册。仓库面向 Repo 接口：无凭据阶段用 MemoryRepo，DATABASE_URL 就绪后换 PgRepo。
  * 认证：配置 OAuth 凭据后为真实 GitHub OAuth JWT；仅纯离线演示模式（无 OAuth 且无 GitHub token）
@@ -65,6 +77,48 @@ export async function registerRoutes(
   resetSyncSchedule: () => void,
 ): Promise<void> {
   // 纯离线演示模式：未配置 OAuth 且未配置 GitHub token 时才接受演示账号（生产不残留后门）
+
+  /** 客户端插件版本自动检测（惰性 + 30 分钟 TTL；force=true 强制刷新）。 */
+  const detectClientVersion = async (force = false): Promise<ClientPushDetect> => {
+    if (clientPushDetecting) return clientPushDetecting
+    if (!force && clientPushCache && Date.now() - clientPushCache.at < CLIENT_PUSH_TTL_MS) {
+      return clientPushCache
+    }
+    clientPushDetecting = (async (): Promise<ClientPushDetect> => {
+      const spec = String(repo.getConfig().client.install_spec || 'github:hajimilvdou/dsh-storecloud').trim()
+      const m = spec.match(/^github:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/)
+      const now = Date.now()
+      if (!m) {
+        clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: '安装地址非 github:owner/repo，无法自动检测版本' }
+        return clientPushCache
+      }
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 10000)
+      try {
+        const res = await fetch(`https://raw.githubusercontent.com/${m[1]}/main/package.json`, {
+          headers: { 'User-Agent': 'dsh-store-server', Accept: 'application/vnd.github.raw+json' },
+          signal: ctrl.signal,
+        })
+        if (!res.ok) {
+          clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: `无法读取仓库 package.json（HTTP ${res.status}）` }
+          return clientPushCache
+        }
+        const pkg = (await res.json()) as { version?: string }
+        clientPushCache = { version: String(pkg.version ?? ''), at: now, error: null }
+        return clientPushCache
+      } catch (e) {
+        clientPushCache = { version: clientPushCache?.version ?? '', at: now, error: `检测失败：${String((e as Error)?.message ?? e)}` }
+        return clientPushCache
+      } finally {
+        clearTimeout(timer)
+      }
+    })()
+    try {
+      return await clientPushDetecting
+    } finally {
+      clientPushDetecting = null
+    }
+  }
   const demoMode = !auth.enabled && !sync.enabled
   // SSE 广播器：点赞/公告/插件库变更实时推送（单实例；多实例预留 Redis pub/sub）。
   const broadcast = new Broadcast()
@@ -271,42 +325,50 @@ export async function registerRoutes(
   }))
 
   /* ================= manifest ================= */
-  app.get(API.manifest, async (): Promise<Manifest> => ({
-    protocol_version: PROTOCOL_VERSION,
-    software_version: serverVersion(),
-    cluster_id: process.env.CLUSTER_ID ?? null,
-    server_time: new Date().toISOString(),
-    plugins_revision: String(repo.getPluginsRevision()),
-    combos_revision: String(repo.getCombosRevision()),
-    latest_announcement_id: repo.latestAnnouncementId(),
-    features: {
-      trending: cfg.feature.trending,
-      likes: cfg.feature.likes,
-      combos: cfg.feature.combos,
-      announcements: cfg.feature.announcements,
-      federation: cfg.federation.enabled,
-    },
-    nodes: repo.getNodes(),
-    client_config: {
-      trending_size: cfg.trending.size,
-      search_threshold: 0.4,
-      onboarding_auto_open_times: cfg.onboarding.auto_open_times,
-      server_local_port: cfg.server.local_port,
-      ui_default_theme: cfg.ui.default_theme,
-      ui_window_min: cfg.ui.window_min,
-      ui_window_max: cfg.ui.window_max,
-      data_heartbeat_min: cfg.sync.data_heartbeat_min,
-      combos_refresh_min: cfg.sync.combos_refresh_min,
-      restore_max_points: cfg.restore.max_points,
-      combo_limit: cfg.user.combo_limit,
-      /** 插件组审核开关：true=发布需审核；false=发布直接上线。客户端弹窗提示用。 */
-      combo_review_enabled: cfg.user.combo_review_enabled,
-    },
-    // 客户端插件版本推送：配置中心 client.plugin_version 非空即下发
-    client_plugin: repo.getConfig().client.plugin_version
-      ? { version: repo.getConfig().client.plugin_version, install: repo.getConfig().client.install_spec }
-      : null,
-  }))
+  app.get(API.manifest, async (): Promise<Manifest> => {
+    // 客户端插件版本推送（自动）：启用开关 + 自动检测仓库最新版本（30 分钟 TTL 缓存，惰性刷新）。
+    // 检测失败/未检测到时用配置兼容字段 plugin_version（旧版手动值）；两者皆空则不推送。
+    let clientPlugin: Manifest['client_plugin'] = null
+    const c = repo.getConfig().client
+    if (c.push_enabled) {
+      const detected = await detectClientVersion()
+      const version = detected.version || c.plugin_version || ''
+      if (version) clientPlugin = { version, install: c.install_spec || 'github:hajimilvdou/dsh-storecloud' }
+    }
+    return {
+      protocol_version: PROTOCOL_VERSION,
+      software_version: serverVersion(),
+      cluster_id: process.env.CLUSTER_ID ?? null,
+      server_time: new Date().toISOString(),
+      plugins_revision: String(repo.getPluginsRevision()),
+      combos_revision: String(repo.getCombosRevision()),
+      latest_announcement_id: repo.latestAnnouncementId(),
+      features: {
+        trending: cfg.feature.trending,
+        likes: cfg.feature.likes,
+        combos: cfg.feature.combos,
+        announcements: cfg.feature.announcements,
+        federation: cfg.federation.enabled,
+      },
+      nodes: repo.getNodes(),
+      client_config: {
+        trending_size: cfg.trending.size,
+        search_threshold: 0.4,
+        onboarding_auto_open_times: cfg.onboarding.auto_open_times,
+        server_local_port: cfg.server.local_port,
+        ui_default_theme: cfg.ui.default_theme,
+        ui_window_min: cfg.ui.window_min,
+        ui_window_max: cfg.ui.window_max,
+        data_heartbeat_min: cfg.sync.data_heartbeat_min,
+        combos_refresh_min: cfg.sync.combos_refresh_min,
+        restore_max_points: cfg.restore.max_points,
+        combo_limit: cfg.user.combo_limit,
+        /** 插件组审核开关：true=发布需审核；false=发布直接上线。客户端弹窗提示用。 */
+        combo_review_enabled: cfg.user.combo_review_enabled,
+      },
+      client_plugin: clientPlugin,
+    }
+  })
 
   /* ================= 数据通道（增量 + 全量兜底） ================= */
   app.get<{ Querystring: { since?: string; kind?: string } }>(API.plugins, async (req): Promise<Delta<Plugin>> => {
@@ -1021,6 +1083,21 @@ export async function registerRoutes(
     } finally {
       clearTimeout(timer)
     }
+  })
+  app.get('/admin/client-push', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const c = repo.getConfig().client
+    return {
+      enabled: c.push_enabled !== false,
+      install_spec: c.install_spec || 'github:hajimilvdou/dsh-storecloud',
+      plugin_version: c.plugin_version || '',
+      detected: clientPushCache ? { ...clientPushCache, at_iso: new Date(clientPushCache.at).toISOString() } : null,
+    }
+  })
+  app.post('/admin/client-push/check', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const d = await detectClientVersion(true)
+    return { ok: true, detected: { ...d, at_iso: new Date(d.at).toISOString() } }
   })
   app.get('/admin/sync', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

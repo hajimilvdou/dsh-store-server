@@ -186,10 +186,12 @@ export interface ServerConfig {
     password: string
   }
   client: {
-    /** 客户端插件最新版本号：非空时随 manifest 下发，客户端比对后横幅提示更新。 */
+    /** 客户端插件最新版本号：兼容字段（旧版手动推送）；新逻辑由服务端自动检测仓库 package.json，见 routes.ts detectClientVersion。 */
     plugin_version: string
-    /** 客户端插件安装 spec（npm 包名或 github:owner/repo），客户端更新 = dsh plugin add <spec>@<version>。 */
+    /** 客户端插件安装 spec（内置默认 = 用户端仓库；可覆盖为 npm 包名或自建仓库）。 */
     install_spec: string
+    /** 客户端插件版本推送开关：true=启用自动推送（manifest 下发自动检测到的最新版本）。 */
+    push_enabled: boolean
   }
   notify: {
     badge_enabled: boolean
@@ -310,7 +312,8 @@ export const DEFAULT_CONFIG: ServerConfig = {
   },
   client: {
     plugin_version: '',
-    install_spec: '',
+    install_spec: 'github:hajimilvdou/dsh-storecloud',
+    push_enabled: true,
   },
   notify: {
     badge_enabled: true,
