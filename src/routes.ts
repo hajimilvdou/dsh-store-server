@@ -1003,10 +1003,13 @@ export async function registerRoutes(
     const spec = String((req.body as { install?: string } | undefined)?.install ?? '').trim()
     const m = spec.match(/^github:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/)
     if (!m) return reply.code(400).send({ error: 'bad_spec', message: '自动检测仅支持 github:owner/repo 安装地址' })
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 10000)
     try {
       // 公开仓库直接读 main 分支 package.json（无需 token）——版本号单一事实来源
       const res = await fetch(`https://raw.githubusercontent.com/${m[1]}/main/package.json`, {
         headers: { 'User-Agent': 'dsh-store-server', Accept: 'application/vnd.github.raw+json' },
+        signal: ctrl.signal,
       })
       if (!res.ok) {
         return reply.code(502).send({ error: 'fetch_failed', message: `无法读取仓库 package.json（HTTP ${res.status}，请确认仓库公开且存在 main 分支）` })
@@ -1015,6 +1018,8 @@ export async function registerRoutes(
       return { ok: true, name: pkg.name ?? '', version: pkg.version ?? '' }
     } catch (e) {
       return reply.code(502).send({ error: 'fetch_failed', message: `检测失败：${String((e as Error)?.message ?? e)}` })
+    } finally {
+      clearTimeout(timer)
     }
   })
   app.get('/admin/sync', async (req, reply) => {
