@@ -76,6 +76,7 @@ export const CONFIG_KEYS = {
   github_client_id: 'auth.github_client_id',
   github_client_secret: 'auth.github_client_secret',
   jwt_secret: 'auth.jwt_secret',
+  oauth_callback_url: 'auth.oauth_callback_url',
 
   /* 管理员 */
   admin_password: 'admin.password',
@@ -180,6 +181,13 @@ export interface ServerConfig {
     github_client_secret: string
     /** JWT 签名密钥（更换后全员会话失效，需重新登录）。 */
     jwt_secret: string
+    /**
+     * OAuth 回调地址（本服务器对外完整地址，如 https://example.com）。
+     * 作为 GitHub OAuth App 的 redirect_uri 前缀。自建/多服务器场景必须按各自域名填写；
+     * 留空回落环境变量 OAUTH_CALLBACK_URL，两者皆空时登录接口 503 并提示配置。
+     * （不再内置任何默认域名——每个部署的回调地址都由管理员自己声明。）
+     */
+    oauth_callback_url: string
   }
   admin: {
     /** 管理端访问密码（配置中心可改；留空回落环境变量 ADMIN_TOKEN；两者皆空时管理端 503。仅纯离线演示模式有默认值 mock-admin）。 */
@@ -306,6 +314,7 @@ export const DEFAULT_CONFIG: ServerConfig = {
     github_client_id: '',
     github_client_secret: '',
     jwt_secret: '',
+    oauth_callback_url: '',
   },
   admin: {
     password: '',

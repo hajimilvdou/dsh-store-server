@@ -134,6 +134,10 @@ export async function registerRoutes(
       clientPushDetecting = null
     }
   }
+  // OAuth 回调 base：本服务器对外完整地址。优先管理端配置中心 auth.oauth_callback_url，
+  // 其次环境变量 OAUTH_CALLBACK_URL；两者皆空返回空串（登录时未配置会 503 引导填写）。
+  // 不再内置默认域名——每个部署的回调地址都应由管理员显式声明（GitHub App 上登记的保持一致）。
+  const callbackUrl = (): string => (String(repo.getConfig().auth.oauth_callback_url || '').trim() || (process.env.OAUTH_CALLBACK_URL || '').trim())
   const demoMode = !auth.enabled && !sync.enabled
   // SSE 广播器：点赞/公告/插件库变更实时推送（单实例；多实例预留 Redis pub/sub）。
   const broadcast = new Broadcast()
@@ -159,7 +163,7 @@ export async function registerRoutes(
   }
   /** 当前请求的 host（用户 home_server 归属；OAUTH_CALLBACK_URL 显式配置时优先）。 */
   const homeOf = (req: FastifyRequest): string => {
-    const base = (process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`
+    const base = callbackUrl() || `${req.protocol}://${req.headers.host ?? ''}`
     return base.replace(/^https?:\/\//, '').replace(/\/+$/, '') || 'unknown'
   }
   const requireUser = (req: FastifyRequest, reply: FastifyReply): AuthUser | null => {
@@ -267,12 +271,15 @@ export async function registerRoutes(
     if (!auth.enabled) {
       return reply.code(503).send({ error: 'not_configured', message: '未配置 GitHub OAuth 凭据（Client ID/Secret/JWT 密钥），可在管理端配置中心填写' })
     }
-    // 回调地址必须与 GitHub OAuth App 注册的 callback URL 完全一致：
-    // 优先 OAUTH_CALLBACK_URL 显式配置；否则固定使用官方域名(用户登记的
-    // 回调地址为 https://blog.1qwq1.top/auth/callback)。
+    // 回调地址必须与 GitHub OAuth App 注册的 callback URL 完全一致，且每个部署
+    // （域名/端口）各自不同 → 由管理员在管理端配置中心显式填写（或环境变量
+    // OAUTH_CALLBACK_URL）；不配置时不再内置默认域名，返回 503 并引导填写。
     // ⚠ 不能依赖 req.protocol / req.headers.host：反代内部转发时两者都可能
     // 与 GitHub 登记的地址不一致 → "The redirect_uri is not associated"。
-    const base = (process.env.OAUTH_CALLBACK_URL || '').trim() || 'https://blog.1qwq1.top'
+    const base = callbackUrl()
+    if (!base) {
+      return reply.code(503).send({ error: 'oauth_callback_not_configured', message: '未配置 OAuth 回调地址：请在管理端 · 配置中心 · OAuth 里填写本服务器的对外回调基础地址（如 https://你的域名），并与 GitHub OAuth App 登记的 Authorization callback URL（基础地址 + /auth/callback）保持一致；或设置环境变量 OAUTH_CALLBACK_URL。' })
+    }
     const state = auth.newState()
     return reply.redirect(auth.authorizeUrl(`${base}/auth/callback`, state))
   })
@@ -629,7 +636,7 @@ export async function registerRoutes(
     if (!kind || !FED_KINDS.includes(kind as FedSyncKind)) {
       return reply.code(400).send({ error: 'bad_request', message: `kind 必填且 ∈ ${FED_KINDS.join('|')}` })
     }
-    const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+    const self = (callbackUrl() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
     if (kind === 'plugins') {
       return { kind, server: self, items: repo.getPlugins() }
     }
@@ -980,7 +987,7 @@ export async function registerRoutes(
     if (typeof secret !== 'string' || !secret) return reply.code(400).send({ error: 'bad_request', message: '对方联邦密码必填' })
     const kinds = Array.isArray(req.body?.kinds) ? (req.body.kinds as string[]).filter((k) => FED_KINDS.includes(k as FedSyncKind)) : [...FED_KINDS]
     // 本机对外地址：OAuth 场景同样依赖反代/域名的显式配置，优先 OAUTH_CALLBACK_URL。
-    const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
+    const self = (callbackUrl() || `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
     const peer = peerUrl.replace(/\/+$/, '')
     const selfFed = repo.getConfig().federation
     try {
@@ -1011,7 +1018,7 @@ export async function registerRoutes(
     repo.log('admin', `federation.${action}`, { id })
     // 单方面解除：通知对方服务器(对方仪表盘待办/消息区可见)。
     if (action === 'disconnect' || action === 'reject') {
-      const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+      const self = (callbackUrl() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
       repo.addFedMessage({ relation_id: r.id, body: `已向 ${self} 发送解除通知`, direction: 'out' })
       void fedSync.notifyPeer(r, `对方服务器 ${self} 已单方面解除联邦连接${action === 'reject' ? '（拒绝邀请）' : ''}`)
     }
