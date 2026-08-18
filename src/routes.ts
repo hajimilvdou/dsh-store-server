@@ -159,7 +159,7 @@ export async function registerRoutes(
   }
   /** 当前请求的 host（用户 home_server 归属；OAUTH_CALLBACK_URL 显式配置时优先）。 */
   const homeOf = (req: FastifyRequest): string => {
-    const base = process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? ''}`
+    const base = (process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`
     return base.replace(/^https?:\/\//, '').replace(/\/+$/, '') || 'unknown'
   }
   const requireUser = (req: FastifyRequest, reply: FastifyReply): AuthUser | null => {
@@ -272,7 +272,7 @@ export async function registerRoutes(
     // 回调地址为 https://blog.1qwq1.top/auth/callback)。
     // ⚠ 不能依赖 req.protocol / req.headers.host：反代内部转发时两者都可能
     // 与 GitHub 登记的地址不一致 → "The redirect_uri is not associated"。
-    const base = process.env.OAUTH_CALLBACK_URL ?? 'https://blog.1qwq1.top'
+    const base = (process.env.OAUTH_CALLBACK_URL || '').trim() || 'https://blog.1qwq1.top'
     const state = auth.newState()
     return reply.redirect(auth.authorizeUrl(`${base}/auth/callback`, state))
   })
@@ -629,7 +629,7 @@ export async function registerRoutes(
     if (!kind || !FED_KINDS.includes(kind as FedSyncKind)) {
       return reply.code(400).send({ error: 'bad_request', message: `kind 必填且 ∈ ${FED_KINDS.join('|')}` })
     }
-    const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+    const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
     if (kind === 'plugins') {
       return { kind, server: self, items: repo.getPlugins() }
     }
@@ -980,7 +980,7 @@ export async function registerRoutes(
     if (typeof secret !== 'string' || !secret) return reply.code(400).send({ error: 'bad_request', message: '对方联邦密码必填' })
     const kinds = Array.isArray(req.body?.kinds) ? (req.body.kinds as string[]).filter((k) => FED_KINDS.includes(k as FedSyncKind)) : [...FED_KINDS]
     // 本机对外地址：OAuth 场景同样依赖反代/域名的显式配置，优先 OAUTH_CALLBACK_URL。
-    const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
+    const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? '127.0.0.1:8080'}`).replace(/\/+$/, '')
     const peer = peerUrl.replace(/\/+$/, '')
     const selfFed = repo.getConfig().federation
     try {
@@ -1011,7 +1011,7 @@ export async function registerRoutes(
     repo.log('admin', `federation.${action}`, { id })
     // 单方面解除：通知对方服务器(对方仪表盘待办/消息区可见)。
     if (action === 'disconnect' || action === 'reject') {
-      const self = (process.env.OAUTH_CALLBACK_URL ?? `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
+      const self = ((process.env.OAUTH_CALLBACK_URL || '').trim() || `${req.protocol}://${req.headers.host ?? ''}`).replace(/\/+$/, '')
       repo.addFedMessage({ relation_id: r.id, body: `已向 ${self} 发送解除通知`, direction: 'out' })
       void fedSync.notifyPeer(r, `对方服务器 ${self} 已单方面解除联邦连接${action === 'reject' ? '（拒绝邀请）' : ''}`)
     }
